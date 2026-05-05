@@ -1,0 +1,1012 @@
+import React, { useState, useEffect } from 'react';
+import { useDispatch, useSelector } from 'react-redux';
+import { useNavigate, useLocation } from 'react-router-dom';
+
+// MUI Icons
+import HourglassEmptyIcon from '@mui/icons-material/HourglassEmpty';
+import WarningAmberIcon from '@mui/icons-material/WarningAmber';
+import LocalShippingIcon from '@mui/icons-material/LocalShipping';
+import ChatIcon from '@mui/icons-material/Chat';
+import PrintIcon from '@mui/icons-material/Print';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import NewReleasesIcon from '@mui/icons-material/NewReleases';
+import StorefrontIcon from '@mui/icons-material/Storefront';
+import SendIcon from '@mui/icons-material/Send';
+import LocalShippingOutlinedIcon from '@mui/icons-material/LocalShippingOutlined';
+import ExpandLessIcon from '@mui/icons-material/ExpandLess';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import EditIcon from '@mui/icons-material/Edit';
+import AddCircleIcon from '@mui/icons-material/AddCircle';
+import SearchIcon from '@mui/icons-material/Search';
+import LocationOnIcon from '@mui/icons-material/LocationOn';
+
+// MUI Components
+import {
+  Box, Typography, Grid, Paper, Tabs, Tab, Table, TableBody,
+  TableCell, TableContainer, TableHead, TableRow, Checkbox,
+  Button, Chip, Divider, CircularProgress, Alert, TextField,
+  InputAdornment, Dialog, DialogTitle, DialogContent,
+  DialogActions, FormControlLabel, Switch, MenuItem, Select,
+  FormControl, InputLabel, Snackbar, Collapse, IconButton,
+} from '@mui/material';
+
+// Redux - Warehouse
+import {
+  fetchAllOrders, fetchPurchaseList, fetchAllBaseProducts,
+  fetchOrdersWithNewProducts, pickMaterialAction, markReadyForShipping,
+  createBaseProductAction, markBaseProductSupplied, clearCreateStatus,
+  updateBaseProductAction, markSupplierSentAction, markSupplierArrivedAction,
+} from '../store/slices/warehouseSlice';
+
+// ⚠️ עדכני את הנתיבים הבאים לפי הפרויקט שלך:
+import { fetchNotifications, markNotificationRead } from '../store/slices/notificationsSlice';
+import { fetchActiveChatPartners } from '../store/slices/chatSlice';
+
+// ─── קבועים ──────────────────────────────────────────────
+const C = {
+  primary: '#D2691E', dark: '#3E2723', medium: '#A0522D',
+  light: '#FBF0E9', border: '#E8C9B0',
+};
+
+const STATUS_META = {
+  ORDERED:               { label: 'הזמנה חדשה',   color: '#D2691E' },
+  WAITING_FOR_WAREHOUSE: { label: 'ממתין למחסן',  color: '#E65100' },
+  WAITING_FOR_PICKING:   { label: 'ממתין לליקוט', color: '#A0522D' },
+  WAITING_FOR_SUPPLY:    { label: 'ממתין לאספקה', color: '#8B0000' },
+  READY_FOR_SHIPPING:    { label: 'מוכן למשלוח',  color: '#2E7D32' },
+  IN_PROGRESS:           { label: 'בעבודה',        color: '#6D4C41' },
+  DONE:                  { label: 'הושלם',         color: '#9E9E9E' },
+};
+
+const PURCHASE_STATUS = {
+  PENDING:          { label: 'ממתין',     bg: '#FFF8E1', color: '#F59E0B', border: '#FCD34D' },
+  SENT_TO_SUPPLIER: { label: 'נשלח לספק', bg: '#E0F2FE', color: '#0284C7', border: '#7DD3FC' },
+  ARRIVED:          { label: 'הגיע ✓',    bg: '#DCFCE7', color: '#16A34A', border: '#86EFAC' },
+};
+
+const EMPTY_FORM = {
+  name: '', code: '', unit: '', quantity: 0, minStock: 5,
+  reorderQuantity: 20, shelfLocation: '', supplier: '',
+  isMaterial: false, materialType: null, priceDelta: 0,
+  description: '',
+};
+
+// ─── כרטיס סטטיסטיקה ─────────────────────────────────────
+const StatCard = ({ title, value, sub, color, icon, onClick }) => (
+  <Box onClick={onClick} sx={{
+    bgcolor: color, borderRadius: 3, p: 2.5, height: 130,
+    cursor: onClick ? 'pointer' : 'default',
+    display: 'flex', flexDirection: 'column', justifyContent: 'space-between',
+    transition: '0.15s',
+    '&:hover': onClick ? { transform: 'translateY(-2px)', opacity: 0.92 } : {},
+  }}>
+    <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
+      <Typography sx={{ fontSize: 13, color: 'rgba(255,255,255,0.85)', fontWeight: 500 }}>
+        {title}
+      </Typography>
+      <Box sx={{ color: 'rgba(255,255,255,0.7)' }}>{icon}</Box>
+    </Box>
+    <Box>
+      <Typography sx={{ fontSize: 32, fontWeight: 700, color: 'white', lineHeight: 1 }}>
+        {value}
+      </Typography>
+      <Typography sx={{ fontSize: 11, color: 'rgba(255,255,255,0.7)', mt: 0.4 }}>
+        {sub}
+      </Typography>
+    </Box>
+  </Box>
+);
+
+// ─── כרטיס הזמנה ─────────────────────────────────────────
+const OrderCard = ({ order, onPick, onReady, newProductIds }) => {
+  const allPicked  = order.requiredMaterials?.every(m => m.isPicked);
+  const hasMissing = order.status === 'WAITING_FOR_SUPPLY';
+
+  return (
+    <Paper sx={{
+      p: 3, borderRadius: 3, mb: 2,
+      border: `1px solid ${hasMissing ? '#FFCDD2' : '#E0E0E0'}`,
+      bgcolor: hasMissing ? '#FFF8F8' : 'white',
+    }}>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2 }}>
+        <Box>
+          <Typography sx={{ fontWeight: 700, fontSize: 15 }}>
+            הזמנה #{order._id?.slice(-5)} — {order.customer?.name}
+          </Typography>
+          <Typography sx={{ fontSize: 12, color: '#A1887F' }}>
+            נגר: {order.assignedCarpenter?.fullName || '—'} | {order.customer?.deliveryAddress}
+          </Typography>
+        </Box>
+        <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+          <Chip
+            label={STATUS_META[order.status]?.label || order.status}
+            size="small"
+            sx={{ bgcolor: STATUS_META[order.status]?.color, color: 'white', fontWeight: 600 }}
+          />
+          {allPicked && (
+            <Button
+              variant="contained" size="small"
+              startIcon={<PrintIcon />}
+              onClick={() => onReady(order._id)}
+              sx={{ bgcolor: '#2E7D32', fontSize: 12 }}
+            >
+              מוכן למשלוח + הדפס
+            </Button>
+          )}
+        </Box>
+      </Box>
+
+      <Divider sx={{ mb: 2 }} />
+
+      <Grid container spacing={1.5}>
+        {order.requiredMaterials?.map((mat, i) => {
+          const productId    = (mat.product?._id || mat.product)?.toString();
+          const isMissing    = order.unavailableMaterials?.some(
+            u => (u.product?._id || u.product)?.toString() === productId
+          );
+          const isNewProduct = newProductIds.includes(productId);
+
+          return (
+            <Grid size={{ xs: 12, sm: 4 }} key={i}>
+              <Box sx={{
+                p: 1.5, borderRadius: 2,
+                bgcolor: mat.isPicked ? '#F1F8E9'
+                  : isNewProduct ? '#FFF3E0'
+                  : isMissing    ? '#FFEBEE'
+                  : '#F5F5F5',
+                display: 'flex', alignItems: 'center', gap: 1,
+                border: isNewProduct ? '1px solid #FFB74D' : 'none',
+              }}>
+                <Checkbox
+                  checked={!!mat.isPicked}
+                  disabled={mat.isPicked || isMissing || isNewProduct}
+                  onChange={() => onPick(order._id, productId)}
+                  size="small"
+                  sx={{ color: C.primary, '&.Mui-checked': { color: '#2E7D32' } }}
+                />
+                <Box sx={{ flex: 1 }}>
+                  <Typography sx={{
+                    fontSize: 12.5, fontWeight: 500,
+                    textDecoration: mat.isPicked ? 'line-through' : 'none',
+                    color: mat.isPicked ? '#9E9E9E' : 'inherit',
+                  }}>
+                    {mat.product?.name || 'חומר'} × {mat.quantity}
+                  </Typography>
+                  {isNewProduct && (
+                    <Chip
+                      icon={<NewReleasesIcon sx={{ fontSize: 12 }} />}
+                      label="מוצר חדש! יש לבצע אספקה ראשונית"
+                      size="small"
+                      sx={{ bgcolor: '#FFE0B2', color: '#E65100', fontSize: 10, height: 20, mt: 0.3 }}
+                    />
+                  )}
+                  {isMissing && !isNewProduct && (
+                    <Chip
+                      label="חסר במלאי" size="small"
+                      sx={{ bgcolor: '#FFCDD2', color: '#C62828', fontSize: 10, height: 18 }}
+                    />
+                  )}
+                </Box>
+                {mat.isPicked && <CheckCircleIcon sx={{ fontSize: 16, color: '#2E7D32' }} />}
+              </Box>
+            </Grid>
+          );
+        })}
+      </Grid>
+    </Paper>
+  );
+};
+
+// ─── כרטיס ספק ברכש מרוכז ────────────────────────────────
+const SupplierPurchaseCard = ({ supplierName, items, onMarkSent, onMarkArrived, loadingSupplier }) => {
+  const [expanded, setExpanded] = useState(true);
+
+  const statuses = items.map(i => i.status || 'PENDING');
+  const supplierStatus = statuses.every(s => s === 'ARRIVED')
+    ? 'ARRIVED'
+    : statuses.every(s => s === 'SENT_TO_SUPPLIER' || s === 'ARRIVED')
+    ? 'SENT_TO_SUPPLIER'
+    : 'PENDING';
+
+  const st = PURCHASE_STATUS[supplierStatus];
+  const isLoading = loadingSupplier === supplierName;
+  const totalItems = items.reduce((acc, i) => acc + (i.totalQuantityNeeded || 0), 0);
+
+  return (
+    <Paper sx={{ mb: 2, borderRadius: 3, border: `1px solid ${st.border}`, overflow: 'hidden' }}>
+      <Box sx={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        px: 2.5, py: 1.8, bgcolor: st.bg,
+        borderBottom: expanded ? `1px solid ${st.border}` : 'none',
+      }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+          <StorefrontIcon sx={{ color: st.color, fontSize: 22 }} />
+          <Box>
+            <Typography sx={{ fontWeight: 700, fontSize: 15, color: '#3E2723' }}>{supplierName}</Typography>
+            <Typography sx={{ fontSize: 11, color: '#A1887F' }}>
+              {items.length} פריטים | סה"כ {totalItems} יחידות
+            </Typography>
+          </Box>
+          <Chip
+            label={st.label} size="small"
+            sx={{ bgcolor: 'white', color: st.color, border: `1px solid ${st.border}`, fontWeight: 600, fontSize: 11 }}
+          />
+        </Box>
+
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          {supplierStatus === 'PENDING' && (
+            <Button
+              size="small" variant="contained"
+              startIcon={isLoading ? <CircularProgress size={14} sx={{ color: 'white' }} /> : <SendIcon sx={{ fontSize: 14 }} />}
+              disabled={isLoading}
+              onClick={() => onMarkSent(supplierName)}
+              sx={{ bgcolor: '#0284C7', fontSize: 12, fontWeight: 600, borderRadius: 2 }}
+            >
+              הרשימה נשלחה לטיפול הספק
+            </Button>
+          )}
+          {supplierStatus === 'SENT_TO_SUPPLIER' && (
+            <Button
+              size="small" variant="contained"
+              startIcon={isLoading ? <CircularProgress size={14} sx={{ color: 'white' }} /> : <LocalShippingOutlinedIcon sx={{ fontSize: 14 }} />}
+              disabled={isLoading}
+              onClick={() => onMarkArrived(supplierName)}
+              sx={{ bgcolor: '#16A34A', fontSize: 12, fontWeight: 600, borderRadius: 2 }}
+            >
+              סמן כהגיע
+            </Button>
+          )}
+          {supplierStatus === 'ARRIVED' && (
+            <Chip
+              icon={<CheckCircleIcon sx={{ fontSize: 14, color: '#16A34A' }} />}
+              label="הושלם" size="small"
+              sx={{ bgcolor: '#DCFCE7', color: '#16A34A', fontWeight: 600 }}
+            />
+          )}
+          <IconButton size="small" onClick={() => setExpanded(p => !p)}>
+            {expanded ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+          </IconButton>
+        </Box>
+      </Box>
+
+      <Collapse in={expanded}>
+        <Table size="small">
+          <TableHead>
+            <TableRow sx={{ bgcolor: '#FAFAFA' }}>
+              <TableCell sx={{ fontWeight: 600, fontSize: 12, color: '#5D4037' }}>מוצר</TableCell>
+              <TableCell align="center" sx={{ fontWeight: 600, fontSize: 12, color: '#5D4037' }}>יחידה</TableCell>
+              <TableCell align="center" sx={{ fontWeight: 600, fontSize: 12, color: '#E65100' }}>להזמנות</TableCell>
+              <TableCell align="center" sx={{ fontWeight: 600, fontSize: 12, color: '#0284C7' }}>למלאי</TableCell>
+              <TableCell align="center" sx={{ fontWeight: 600, fontSize: 12, color: '#3E2723' }}>סה"כ</TableCell>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {items.map((item, i) => (
+              <TableRow key={item._id || i} hover sx={{ '&:last-child td': { border: 0 } }}>
+                <TableCell sx={{ fontSize: 13, fontWeight: 500 }}>
+                  {item.product?.name || item.name || '—'}
+                </TableCell>
+                <TableCell align="center" sx={{ fontSize: 12, color: '#A1887F' }}>
+                  {item.product?.unit || '—'}
+                </TableCell>
+                <TableCell align="center">
+                  <Chip label={item.forOrders} size="small"
+                    sx={{ bgcolor: '#FFF3E0', color: '#E65100', fontWeight: 700, fontSize: 11, minWidth: 36 }} />
+                </TableCell>
+                <TableCell align="center">
+                  <Chip label={item.forStock} size="small"
+                    sx={{ bgcolor: '#E0F2FE', color: '#0284C7', fontWeight: 700, fontSize: 11, minWidth: 36 }} />
+                </TableCell>
+                <TableCell align="center">
+                  <Chip label={item.totalQuantityNeeded} size="small"
+                    sx={{ bgcolor: C.primary, color: 'white', fontWeight: 700, fontSize: 12, minWidth: 40 }} />
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </Collapse>
+    </Paper>
+  );
+};
+
+// ─── דיאלוג הוספת מוצר בסיס ──────────────────────────────
+const AddBaseProductDialog = ({ open, onClose }) => {
+  const dispatch = useDispatch();
+  const { createLoading, createError, createSuccess } = useSelector(s => s.warehouse);
+  const [form, setForm] = useState(EMPTY_FORM);
+
+  useEffect(() => {
+    if (createSuccess) {
+      setForm(EMPTY_FORM);
+      onClose();
+      dispatch(clearCreateStatus());
+    }
+  }, [createSuccess]);
+
+  const handleChange = (field) => (e) => {
+    const val = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
+    setForm(prev => ({ ...prev, [field]: val }));
+  };
+
+  const handleSubmit = () => {
+    if (!form.name || !form.unit) return;
+    dispatch(createBaseProductAction({
+      ...form,
+      quantity:        Number(form.quantity),
+      minStock:        Number(form.minStock),
+      reorderQuantity: Number(form.reorderQuantity),
+      priceDelta:      Number(form.priceDelta),
+      materialType:    form.isMaterial && form.materialType ? form.materialType : undefined,
+    }));
+  };
+
+  return (
+    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
+      <DialogTitle sx={{ fontWeight: 700, color: C.dark }}>➕ הוספת מוצר בסיס חדש למחסן</DialogTitle>
+      <DialogContent>
+        <Grid container spacing={2} sx={{ mt: 0.5 }}>
+          <Grid size={{ xs: 8 }}>
+            <TextField fullWidth size="small" label="שם המוצר *" value={form.name} onChange={handleChange('name')} />
+          </Grid>
+          <Grid size={{ xs: 4 }}>
+            <TextField fullWidth size="small" label="קוד (SKU)" value={form.code} onChange={handleChange('code')} />
+          </Grid>
+          <Grid size={{ xs: 4 }}>
+            <TextField fullWidth size="small" label="יחידת מידה *" value={form.unit} onChange={handleChange('unit')} placeholder='מ"ר, יח׳, מ"ל' />
+          </Grid>
+          <Grid size={{ xs: 4 }}>
+            <TextField fullWidth size="small" label="כמות ראשונית" type="number" value={form.quantity} onChange={handleChange('quantity')} />
+          </Grid>
+          <Grid size={{ xs: 4 }}>
+            <TextField fullWidth size="small" label="מינימום מלאי" type="number" value={form.minStock} onChange={handleChange('minStock')} />
+          </Grid>
+          <Grid size={{ xs: 6 }}>
+            <TextField fullWidth size="small" label="מיקום מדף" value={form.shelfLocation} onChange={handleChange('shelfLocation')} placeholder="A1, B3..." />
+          </Grid>
+          <Grid size={{ xs: 6 }}>
+            <TextField fullWidth size="small" label="ספק" value={form.supplier} onChange={handleChange('supplier')} />
+          </Grid>
+          <Grid size={{ xs: 12 }}>
+            <TextField fullWidth size="small" label="תיאור" multiline rows={2} value={form.description} onChange={handleChange('description')} />
+          </Grid>
+          <Grid size={{ xs: 12 }}>
+            <FormControlLabel
+              control={<Switch checked={form.isMaterial} onChange={handleChange('isMaterial')} sx={{ '& .MuiSwitch-thumb': { bgcolor: C.primary } }} />}
+              label="משמש כחומר לבחירה (עץ/בד)"
+            />
+          </Grid>
+          {form.isMaterial && (
+            <>
+              <Grid size={{ xs: 6 }}>
+                <FormControl fullWidth size="small">
+                  <InputLabel>סוג חומר</InputLabel>
+                  <Select value={form.materialType || ''} onChange={handleChange('materialType')} label="סוג חומר">
+                    <MenuItem value="wood">עץ</MenuItem>
+                    <MenuItem value="fabric">בד</MenuItem>
+                  </Select>
+                </FormControl>
+              </Grid>
+              <Grid size={{ xs: 6 }}>
+                <TextField fullWidth size="small" label="תוספת מחיר (₪)" type="number" value={form.priceDelta} onChange={handleChange('priceDelta')} />
+              </Grid>
+            </>
+          )}
+          {createError && (
+            <Grid size={{ xs: 12 }}>
+              <Alert severity="error">{createError}</Alert>
+            </Grid>
+          )}
+        </Grid>
+      </DialogContent>
+      <DialogActions sx={{ p: 2 }}>
+        <Button onClick={onClose} sx={{ color: '#9E9E9E' }}>ביטול</Button>
+        <Button variant="contained" onClick={handleSubmit} disabled={createLoading || !form.name || !form.unit} sx={{ bgcolor: C.primary }}>
+          {createLoading ? <CircularProgress size={20} sx={{ color: 'white' }} /> : 'הוסף מוצר'}
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+};
+
+// ─── דיאלוג עריכת מוצר בסיס ──────────────────────────────
+const EditBaseProductDialog = ({ open, product, onClose, onSaved }) => {
+  const dispatch = useDispatch();
+  const [form, setForm]     = useState(EMPTY_FORM);
+  const [saving, setSaving] = useState(false);
+  const [error, setError]   = useState('');
+
+  useEffect(() => {
+    if (product) {
+      setForm({
+        name:            product.name            || '',
+        code:            product.code            || '',
+        unit:            product.unit            || '',
+        quantity:        product.quantity        ?? 0,
+        minStock:        product.minStock        ?? 5,
+        reorderQuantity: product.reorderQuantity ?? 20,
+        shelfLocation:   product.shelfLocation   || '',
+        supplier:        product.supplier        || '',
+        isMaterial:      product.isMaterial      || false,
+        materialType:    product.materialType    || null,
+        priceDelta:      product.priceDelta      ?? 0,
+        description:     product.description     || '',
+      });
+      setError('');
+    }
+  }, [product]);
+
+  const handleChange = (field) => (e) => {
+    const val = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
+    setForm(prev => ({ ...prev, [field]: val }));
+  };
+
+  const handleSubmit = async () => {
+    if (!form.name || !form.unit) return;
+    setSaving(true);
+    setError('');
+    try {
+      await dispatch(updateBaseProductAction({
+        baseProductId: product._id,
+        data: {
+          ...form,
+          quantity:        Number(form.quantity),
+          minStock:        Number(form.minStock),
+          reorderQuantity: Number(form.reorderQuantity),
+          priceDelta:      Number(form.priceDelta),
+          materialType:    form.isMaterial && form.materialType ? form.materialType : undefined,
+        },
+      })).unwrap();
+      onSaved?.();
+      onClose();
+    } catch (err) {
+      setError(err || 'שגיאה בעדכון המוצר');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!product) return null;
+
+  return (
+    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
+      <DialogTitle sx={{ fontWeight: 700, color: C.dark, display: 'flex', alignItems: 'center', gap: 1 }}>
+        <EditIcon sx={{ color: C.primary }} />
+        עריכת מוצר: {product.name}
+      </DialogTitle>
+      <DialogContent>
+        <Grid container spacing={2} sx={{ mt: 0.5 }}>
+          <Grid size={{ xs: 8 }}>
+            <TextField fullWidth size="small" label="שם המוצר *" value={form.name} onChange={handleChange('name')} />
+          </Grid>
+          <Grid size={{ xs: 4 }}>
+            <TextField fullWidth size="small" label="קוד (SKU)" value={form.code} onChange={handleChange('code')} />
+          </Grid>
+          <Grid size={{ xs: 4 }}>
+            <TextField fullWidth size="small" label="יחידת מידה *" value={form.unit} onChange={handleChange('unit')} />
+          </Grid>
+          <Grid size={{ xs: 4 }}>
+            <TextField fullWidth size="small" label="כמות במלאי" type="number" value={form.quantity} onChange={handleChange('quantity')} />
+          </Grid>
+          <Grid size={{ xs: 4 }}>
+            <TextField fullWidth size="small" label="מינימום מלאי" type="number" value={form.minStock} onChange={handleChange('minStock')} />
+          </Grid>
+          <Grid size={{ xs: 4 }}>
+            <TextField fullWidth size="small" label="כמות הזמנה חוזרת" type="number" value={form.reorderQuantity} onChange={handleChange('reorderQuantity')} />
+          </Grid>
+          <Grid size={{ xs: 4 }}>
+            <TextField fullWidth size="small" label="מיקום מדף" value={form.shelfLocation} onChange={handleChange('shelfLocation')} placeholder="A1, B3..." />
+          </Grid>
+          <Grid size={{ xs: 4 }}>
+            <TextField fullWidth size="small" label="ספק" value={form.supplier} onChange={handleChange('supplier')} />
+          </Grid>
+          <Grid size={{ xs: 12 }}>
+            <TextField fullWidth size="small" label="תיאור" multiline rows={3} value={form.description} onChange={handleChange('description')} />
+          </Grid>
+          <Grid size={{ xs: 12 }}>
+            <FormControlLabel
+              control={<Switch checked={form.isMaterial} onChange={handleChange('isMaterial')} sx={{ '& .MuiSwitch-thumb': { bgcolor: C.primary } }} />}
+              label="משמש כחומר לבחירה (עץ/בד)"
+            />
+          </Grid>
+          {form.isMaterial && (
+            <>
+              <Grid size={{ xs: 6 }}>
+                <FormControl fullWidth size="small">
+                  <InputLabel>סוג חומר</InputLabel>
+                  <Select value={form.materialType || ''} onChange={handleChange('materialType')} label="סוג חומר">
+                    <MenuItem value="wood">עץ</MenuItem>
+                    <MenuItem value="fabric">בד</MenuItem>
+                  </Select>
+                </FormControl>
+              </Grid>
+              <Grid size={{ xs: 6 }}>
+                <TextField fullWidth size="small" label="תוספת מחיר (₪)" type="number" value={form.priceDelta} onChange={handleChange('priceDelta')} />
+              </Grid>
+            </>
+          )}
+          {error && (
+            <Grid size={{ xs: 12 }}>
+              <Alert severity="error">{error}</Alert>
+            </Grid>
+          )}
+        </Grid>
+      </DialogContent>
+      <DialogActions sx={{ p: 2 }}>
+        <Button onClick={onClose} sx={{ color: '#9E9E9E' }}>ביטול</Button>
+        <Button variant="contained" onClick={handleSubmit} disabled={saving || !form.name || !form.unit} sx={{ bgcolor: C.primary }}>
+          {saving ? <CircularProgress size={20} sx={{ color: 'white' }} /> : 'שמור שינויים'}
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+};
+
+// ─── דשבורד ראשי ─────────────────────────────────────────
+const WarehouseDashboard = () => {
+  const dispatch   = useDispatch();
+  const navigate   = useNavigate();
+  const location   = useLocation();
+
+  const [tab, setTab]                         = useState(0);
+  const [search, setSearch]                   = useState('');
+  const [addDialogOpen, setAddDialogOpen]     = useState(false);
+  const [editProduct, setEditProduct]         = useState(null);
+  const [snackMsg, setSnackMsg]               = useState('');
+  const [supplyingIds, setSupplyingIds]       = useState([]);
+  const [loadingSupplier, setLoadingSupplier] = useState(null);
+
+  useEffect(() => {
+    if (location.state?.tab !== undefined) {
+      setTab(location.state.tab);
+    }
+  }, [location.state]);
+
+  const { user } = useSelector(s => s.auth);
+  const { orders, baseProducts, purchaseList, ordersWithNewProducts, loading } = useSelector(s => s.warehouse);
+  const { notifications } = useSelector(s => s.notifications);
+  const chatState = useSelector(s => s.chat);
+
+  const totalUnreadChatCount = (
+    (chatState?.unreadMessagesCount
+      ? Object.values(chatState.unreadMessagesCount).reduce((a, b) => a + (b || 0), 0)
+      : 0) ||
+    (chatState?.activeChatPartners?.reduce((acc, p) => acc + (p.unreadCount || 0), 0) || 0)
+  );
+
+  const newProductIds = (baseProducts || []).filter(p => p.isNew).map(p => p._id?.toString());
+
+  useEffect(() => {
+    dispatch(fetchActiveChatPartners());
+    dispatch(fetchNotifications());
+    dispatch(fetchAllOrders());
+    dispatch(fetchPurchaseList());
+    dispatch(fetchAllBaseProducts());
+    dispatch(fetchOrdersWithNewProducts());
+  }, [dispatch]);
+
+  const handlePick = (orderId, materialId) =>
+    dispatch(pickMaterialAction({ orderId, materialId, warehouseUserId: user?.id || user?._id }));
+
+  const handleReady = (orderId) => {
+    dispatch(markReadyForShipping(orderId));
+    window.print();
+  };
+
+  // ✅ תוספת: רענון purchaseList אחרי סימון כסופק
+  const handleSupplied = async (productId) => {
+    const qty = prompt('כמה יחידות הגיעו?');
+    if (!qty || isNaN(qty)) return;
+    setSupplyingIds(prev => [...prev, productId]);
+    await dispatch(markBaseProductSupplied({ baseProductId: productId, quantity: Number(qty) }));
+    setSupplyingIds(prev => prev.filter(id => id !== productId));
+    setSnackMsg('המוצר עודכן בהצלחה ✅');
+    dispatch(fetchPurchaseList());
+    dispatch(fetchAllBaseProducts());
+  };
+
+  const handleMarkSent = async (supplierName) => {
+    setLoadingSupplier(supplierName);
+    try {
+      await dispatch(markSupplierSentAction(supplierName)).unwrap();
+      setSnackMsg(`ההזמנה נשלחה לספק "${supplierName}" ✅`);
+    } catch (e) {
+      setSnackMsg('שגיאה בשליחה לספק ❌');
+    } finally {
+      setLoadingSupplier(null);
+    }
+  };
+
+  const handleMarkArrived = async (supplierName) => {
+    setLoadingSupplier(supplierName);
+    try {
+      await dispatch(markSupplierArrivedAction(supplierName)).unwrap();
+      setSnackMsg(`סחורה מ"${supplierName}" עודכנה במלאי ✅`);
+      dispatch(fetchAllBaseProducts());
+      dispatch(fetchPurchaseList());
+    } catch (e) {
+      setSnackMsg('שגיאה בעדכון הגעה ❌');
+    } finally {
+      setLoadingSupplier(null);
+    }
+  };
+
+  const purchaseBySupplier = (purchaseList || []).reduce((acc, item) => {
+    const key = item.supplierName || item.product?.supplier || 'ללא ספק';
+    if (!acc[key]) acc[key] = [];
+    acc[key].push(item);
+    return acc;
+  }, {});
+
+  const supplierNames = Object.keys(purchaseBySupplier).sort((a, b) => {
+    if (a === 'ללא ספק') return 1;
+    if (b === 'ללא ספק') return -1;
+    return a.localeCompare(b, 'he');
+  });
+
+  const pickingOrders = (orders || []).filter(o => o.status === 'WAITING_FOR_PICKING');
+  const supplyOrders  = (orders || []).filter(o => o.status === 'WAITING_FOR_SUPPLY');
+  const readyOrders   = (orders || []).filter(o => o.status === 'READY_FOR_SHIPPING');
+  const unreadNotif   = (notifications || []).filter(n => !n.isRead && n.type !== 'CHAT').length;
+
+  const filteredStock = (baseProducts || []).filter(p =>
+    p.name?.toLowerCase().includes(search.toLowerCase()) ||
+    p.shelfLocation?.toLowerCase().includes(search.toLowerCase())
+  );
+
+  const stats = [
+    {
+      title: 'ממתינות לליקוט', value: pickingOrders.length,
+      sub: 'מוכנות לאיסוף', color: '#A0522D',
+      icon: <HourglassEmptyIcon sx={{ fontSize: 24 }} />,
+      onClick: () => setTab(0),
+    },
+    {
+      title: 'ממתינות לאספקה', value: supplyOrders.length,
+      sub: 'חסרים במלאי', color: '#8B0000',
+      icon: <WarningAmberIcon sx={{ fontSize: 24 }} />,
+      onClick: () => setTab(1),
+    },
+    {
+      title: 'מוכנות למשלוח', value: readyOrders.length,
+      sub: 'ארוזות ומחכות', color: '#2E7D32',
+      icon: <LocalShippingIcon sx={{ fontSize: 24 }} />,
+      onClick: () => setTab(0),
+    },
+    {
+      title: "צ'אט והתראות",
+      value: unreadNotif + totalUnreadChatCount,
+      sub: totalUnreadChatCount > 0 ? `${totalUnreadChatCount} הודעות צ'אט` : 'אין חדש',
+      color: '#5D4037',
+      icon: <ChatIcon sx={{ fontSize: 24 }} />,
+      onClick: () => setTab(4),
+    },
+  ];
+
+  if (loading) return (
+    <Box sx={{ display: 'flex', justifyContent: 'center', mt: 10 }}>
+      <CircularProgress sx={{ color: C.primary }} />
+    </Box>
+  );
+
+  return (
+    <Box sx={{ p: 3 }}>
+      <Box sx={{ mb: 3, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+        <Box>
+          <Typography sx={{ fontSize: 22, fontWeight: 700, color: C.dark }}>
+            שלום, {user?.fullName || user?.username || 'מחסנאי'} 👋
+          </Typography>
+          <Typography sx={{ fontSize: 13, color: '#A1887F' }}>דשבורד מחסן</Typography>
+        </Box>
+        <Button
+          variant="contained" startIcon={<AddCircleIcon />}
+          onClick={() => setAddDialogOpen(true)}
+          sx={{ bgcolor: C.primary, borderRadius: 2, fontWeight: 600 }}
+        >
+          הוסף מוצר בסיס
+        </Button>
+      </Box>
+
+      {(ordersWithNewProducts || []).length > 0 && (
+        <Alert
+          severity="warning" icon={<NewReleasesIcon />}
+          sx={{ mb: 2, fontWeight: 600, cursor: 'pointer' }}
+          onClick={() => setTab(3)}
+        >
+          יש {ordersWithNewProducts.length} הזמנות עם מוצרי בסיס חדשים שדורשים אספקה ראשונית — לחץ לצפייה במלאי
+        </Alert>
+      )}
+
+      <Grid container spacing={2} sx={{ mb: 3 }}>
+        {stats.map((s, i) => (
+          <Grid size={{ xs: 6, md: 3 }} key={i}>
+            <StatCard {...s} />
+          </Grid>
+        ))}
+      </Grid>
+
+      <Paper sx={{ borderRadius: 3, border: `1px solid ${C.border}` }}>
+        <Tabs
+          value={tab} onChange={(_, v) => setTab(v)}
+          sx={{
+            borderBottom: `1px solid ${C.border}`,
+            '& .MuiTab-root': { fontSize: 13, fontWeight: 600 },
+            '& .Mui-selected': { color: C.primary },
+            '& .MuiTabs-indicator': { bgcolor: C.primary },
+          }}
+        >
+          <Tab label={`📦 ליקוט (${pickingOrders.length})`} />
+          <Tab label={`⚠️ חוסרים להזמנות פעילות  (${supplyOrders.length})`} />
+          <Tab label={`🛒 רכש מרוכז${supplierNames.length > 0 ? ` (${supplierNames.length})` : ''}`} />
+          <Tab label={`📊 מלאי${newProductIds.length > 0 ? ` 🆕${newProductIds.length}` : ''}`} />
+          <Tab label={`💬 צ'אט${totalUnreadChatCount > 0 ? ` (${totalUnreadChatCount})` : ''}`} />
+        </Tabs>
+
+        <Box sx={{ p: 2.5 }}>
+
+          {tab === 0 && (
+            <Box>
+              {pickingOrders.length === 0
+                ? <Alert severity="success">אין הזמנות ממתינות לליקוט 🎉</Alert>
+                : pickingOrders.map(o => (
+                    <OrderCard key={o._id} order={o} onPick={handlePick} onReady={handleReady} newProductIds={newProductIds} />
+                  ))
+              }
+            </Box>
+          )}
+
+          {tab === 1 && (
+            <Box>
+              {supplyOrders.length === 0
+                ? <Alert severity="info">אין חוסרים כרגע ✅</Alert>
+                : supplyOrders.map(o => (
+                    <OrderCard key={o._id} order={o} onPick={handlePick} onReady={handleReady} newProductIds={newProductIds} />
+                  ))
+              }
+            </Box>
+          )}
+
+          {tab === 2 && (
+            <Box>
+              {supplierNames.length > 0 && (
+                <Box sx={{ display: 'flex', gap: 2, mb: 2.5, flexWrap: 'wrap' }}>
+                  <Box sx={{ p: 1.5, borderRadius: 2, bgcolor: '#FFF8E1', border: '1px solid #FCD34D', minWidth: 120 }}>
+                    <Typography sx={{ fontSize: 11, color: '#A1887F' }}>ספקים פעילים</Typography>
+                    <Typography sx={{ fontSize: 20, fontWeight: 700, color: '#F59E0B' }}>{supplierNames.length}</Typography>
+                  </Box>
+                  <Box sx={{ p: 1.5, borderRadius: 2, bgcolor: '#FBF0E9', border: `1px solid ${C.border}`, minWidth: 120 }}>
+                    <Typography sx={{ fontSize: 11, color: '#A1887F' }}>סה"כ פריטים</Typography>
+                    <Typography sx={{ fontSize: 20, fontWeight: 700, color: C.primary }}>{(purchaseList || []).length}</Typography>
+                  </Box>
+                  <Box sx={{ p: 1.5, borderRadius: 2, bgcolor: '#DCFCE7', border: '1px solid #86EFAC', minWidth: 120 }}>
+                    <Typography sx={{ fontSize: 11, color: '#A1887F' }}>הגיעו</Typography>
+                    <Typography sx={{ fontSize: 20, fontWeight: 700, color: '#16A34A' }}>
+                      {supplierNames.filter(name => purchaseBySupplier[name].every(i => i.status === 'ARRIVED')).length}
+                    </Typography>
+                  </Box>
+                </Box>
+              )}
+              {supplierNames.length === 0
+                ? <Alert severity="success">אין פריטים לרכישה כרגע 🎉</Alert>
+                : supplierNames.map(supplierName => (
+                    <SupplierPurchaseCard
+                      key={supplierName}
+                      supplierName={supplierName}
+                      items={purchaseBySupplier[supplierName]}
+                      onMarkSent={handleMarkSent}
+                      onMarkArrived={handleMarkArrived}
+                      loadingSupplier={loadingSupplier}
+                    />
+                  ))
+              }
+            </Box>
+          )}
+
+          {tab === 3 && (
+            <Box>
+              <Box sx={{ mb: 2, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <TextField
+                  size="small"
+                  placeholder="חפש מוצר או מיקום מדף..."
+                  value={search}
+                  onChange={e => setSearch(e.target.value)}
+                  slotProps={{
+                    input: {
+                      startAdornment: (
+                        <InputAdornment position="start"><SearchIcon /></InputAdornment>
+                      ),
+                    },
+                  }}
+                  sx={{ width: 300 }}
+                />
+                <Typography sx={{ fontSize: 12, color: '#A1887F' }}>
+                  מציג {filteredStock.length} מוצרים
+                  {newProductIds.length > 0 && (
+                    <Chip label={`${newProductIds.length} חדשים`} size="small"
+                      sx={{ ml: 1, bgcolor: '#FFE0B2', color: '#E65100', fontSize: 10 }} />
+                  )}
+                </Typography>
+              </Box>
+
+              <TableContainer component={Paper} sx={{ borderRadius: 3 }}>
+                <Table>
+                  <TableHead sx={{ bgcolor: '#EEEEEE' }}>
+                    <TableRow>
+                      <TableCell><b>מוצר בסיס</b></TableCell>
+                      <TableCell align="center"><b>ספק</b></TableCell>
+                      <TableCell align="center"><b>מיקום מדף</b></TableCell>
+                      <TableCell align="center"><b>במלאי</b></TableCell>
+                      <TableCell align="center"><b>משוריין</b></TableCell>
+                      <TableCell align="center"><b>זמין</b></TableCell>
+                      <TableCell align="center"><b>סטטוס</b></TableCell>
+                      <TableCell align="center"><b>פעולה</b></TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {filteredStock.map(product => {
+                      const available = product.quantity - (product.reservedQuantity || 0);
+                      const isLow     = available <= product.minStock;
+                      const isNew     = product.isNew;
+
+                      return (
+                        <TableRow
+                          key={product._id} hover
+                          sx={{ bgcolor: isNew ? '#FFF8E1' : 'inherit', cursor: 'pointer' }}
+                          onClick={() => setEditProduct(product)}
+                        >
+                          <TableCell>
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                              <Box>
+                                <Typography sx={{ fontWeight: 600, fontSize: 13 }}>{product.name}</Typography>
+                                <Typography sx={{ fontSize: 11, color: '#A1887F' }}>
+                                  {product.code || product._id?.slice(-6)}
+                                </Typography>
+                              </Box>
+                              {isNew && (
+                                <Chip label="חדש" size="small"
+                                  sx={{ bgcolor: '#FFE0B2', color: '#E65100', fontWeight: 700, fontSize: 10 }} />
+                              )}
+                            </Box>
+                          </TableCell>
+                          <TableCell align="center">
+                            <Typography sx={{ fontSize: 12, color: '#5D4037' }}>{product.supplier || '—'}</Typography>
+                          </TableCell>
+                          <TableCell align="center">
+                            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5 }}>
+                              <LocationOnIcon fontSize="small" sx={{ color: C.primary }} />
+                              <Typography sx={{ fontWeight: 700, fontSize: 13 }}>{product.shelfLocation || '—'}</Typography>
+                            </Box>
+                          </TableCell>
+                          <TableCell align="center">{product.quantity} {product.unit}</TableCell>
+                          <TableCell align="center" sx={{ color: '#A1887F' }}>{product.reservedQuantity || 0}</TableCell>
+                          <TableCell align="center">
+                            <Typography sx={{ fontWeight: 700, color: isLow ? '#D32F2F' : '#2E7D32' }}>
+                              {available} {product.unit}
+                            </Typography>
+                          </TableCell>
+                          <TableCell align="center">
+                            <Chip
+                              label={isNew ? 'אספקה ראשונית' : isLow ? 'מלאי נמוך' : 'תקין'}
+                              size="small"
+                              color={isNew ? 'warning' : isLow ? 'error' : 'success'}
+                              variant="outlined"
+                            />
+                          </TableCell>
+                          <TableCell align="center" onClick={e => e.stopPropagation()}>
+                            <Box sx={{ display: 'flex', gap: 1, justifyContent: 'center' }}>
+                              <Button
+                                size="small" variant="outlined"
+                                startIcon={<EditIcon sx={{ fontSize: 13 }} />}
+                                onClick={() => setEditProduct(product)}
+                                sx={{ fontSize: 11, color: C.primary, borderColor: C.primary }}
+                              >
+                                עריכה
+                              </Button>
+                              {isNew && (
+                                <Button
+                                  size="small" variant="outlined"
+                                  disabled={supplyingIds.includes(product._id)}
+                                  onClick={() => handleSupplied(product._id)}
+                                  sx={{ fontSize: 11, color: '#E65100', borderColor: '#E65100' }}
+                                >
+                                  {supplyingIds.includes(product._id) ? '...מעדכן' : 'סמן כסופק'}
+                                </Button>
+                              )}
+                            </Box>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            </Box>
+          )}
+
+          {tab === 4 && (
+            <Box>
+              {totalUnreadChatCount > 0 && (
+                <Box
+                  onClick={() => navigate('/chat')}
+                  sx={{
+                    mb: 2, p: 2, borderRadius: 2,
+                    bgcolor: C.primary, color: 'white',
+                    display: 'flex', alignItems: 'center', gap: 2,
+                    cursor: 'pointer',
+                    boxShadow: '0 4px 12px rgba(210,105,30,0.3)',
+                    animation: 'pulse 2s infinite',
+                  }}
+                >
+                  <ChatIcon />
+                  <Box>
+                    <Typography sx={{ fontWeight: 700, fontSize: 14 }}>הודעות צ'אט חדשות!</Typography>
+                    <Typography sx={{ fontSize: 12, opacity: 0.9 }}>
+                      יש לך {totalUnreadChatCount} הודעות שמחכות לך
+                    </Typography>
+                  </Box>
+                </Box>
+              )}
+
+              {(notifications || []).filter(n => !n.isRead && n.type !== 'CHAT').length === 0 && totalUnreadChatCount === 0
+                ? <Alert severity="info">אין התראות חדשות</Alert>
+                : (notifications || [])
+                    .filter(n => !n.isRead && n.type !== 'CHAT')
+                    .map(n => (
+                      <Box
+                        key={n._id || n.id}
+                        sx={{ display: 'flex', justifyContent: 'space-between', py: 1.2, borderBottom: `1px solid ${C.border}` }}
+                      >
+                        <Box sx={{ flex: 1 }}>
+                          <Typography sx={{ fontSize: 12.5, fontWeight: 500 }}>{n.message || n.text}</Typography>
+                          <Typography sx={{ fontSize: 10, color: '#A1887F' }}>
+                            {new Date(n.createdAt).toLocaleString('he-IL')}
+                          </Typography>
+                        </Box>
+                        <Button
+                          size="small" sx={{ minWidth: 0, color: C.primary }}
+                          onClick={() => dispatch(markNotificationRead(n._id || n.id))}
+                        >
+                          ✓
+                        </Button>
+                      </Box>
+                    ))
+              }
+            </Box>
+          )}
+
+        </Box>
+      </Paper>
+
+      <AddBaseProductDialog open={addDialogOpen} onClose={() => setAddDialogOpen(false)} />
+
+      {/* ✅ תוספת: רענון purchaseList ו-baseProducts אחרי עריכה ידנית */}
+      <EditBaseProductDialog
+        open={!!editProduct}
+        product={editProduct}
+        onClose={() => setEditProduct(null)}
+        onSaved={() => {
+          setSnackMsg('המוצר עודכן בהצלחה ✅');
+          dispatch(fetchPurchaseList());
+          dispatch(fetchAllBaseProducts());
+        }}
+      />
+
+      <Snackbar
+        open={!!snackMsg}
+        autoHideDuration={3000}
+        onClose={() => setSnackMsg('')}
+        message={snackMsg}
+      />
+
+      <style>{`
+        @keyframes pulse {
+          0%   { transform: scale(1); }
+          50%  { transform: scale(1.02); }
+          100% { transform: scale(1); }
+        }
+      `}</style>
+    </Box>
+  );
+};
+
+export default WarehouseDashboard;

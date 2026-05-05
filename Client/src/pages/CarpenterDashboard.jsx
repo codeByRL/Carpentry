@@ -1,0 +1,721 @@
+import React, { useEffect, useMemo, useState } from "react";
+import {
+  Alert,
+  Box,
+  Button,
+  Card,
+  CardContent,
+  CircularProgress,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  FormControlLabel,
+  Grid,
+  IconButton,
+  MenuItem,
+  Switch,
+  TextField,
+  Typography,
+} from "@mui/material";
+import AddIcon from "@mui/icons-material/Add";
+import DeleteIcon from "@mui/icons-material/Delete";
+import API from "../services/api";
+
+const cardSx = {
+  borderRadius: 3,
+  border: "1px solid #E5D5C8",
+  height: "100%",
+  bgcolor: "#fff",
+};
+
+const sectionTitleSx = { fontWeight: 700, fontSize: 16, color: "#4E342E", mb: 1.5 };
+const BASE_URL = import.meta.env.VITE_REACT_APP_API_URL || "http://localhost:5001";
+const HOURS_PER_WORK_WEEK = 40;
+
+const CarpenterDashboard = () => {
+  const [orders, setOrders] = useState([]);
+  const [catalogProducts, setCatalogProducts] = useState([]);
+  const [materials, setMaterials] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [submitLoading, setSubmitLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [pauseDialogOrder, setPauseDialogOrder] = useState(null);
+  const [pauseReason, setPauseReason] = useState("");
+  const [characterizeProduct, setCharacterizeProduct] = useState(null);
+  const [newMaterialDialogOpen, setNewMaterialDialogOpen] = useState(false);
+  const [newMaterialName, setNewMaterialName] = useState("");
+  const [newMaterialUnit, setNewMaterialUnit] = useState("יח׳");
+  const [newMaterialSupplier, setNewMaterialSupplier] = useState("");
+  const [newMaterialDescription, setNewMaterialDescription] = useState("");
+  const [characterizeForm, setCharacterizeForm] = useState({
+    estimatedWorkWeeks: "",
+    needsWoodSelection: false,
+    needsFabricSelection: false,
+    baseProducts: [{ product: "", quantity: 1 }],
+    woodOptions: [{ materialId: "", code: "", description: "" }],
+    fabricOptions: [{ materialId: "", code: "", description: "" }],
+  });
+
+  const loadData = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const [ordersRes, catalogRes, materialsRes] = await Promise.all([
+        API.get("/carpenter/my-orders"),
+        API.get("/carpenter/products-for-characterization"),
+        API.get("/base-products?limit=200"),
+      ]);
+      setOrders(ordersRes.data || []);
+      setCatalogProducts(catalogRes.data || []);
+      setMaterials(materialsRes.data || []);
+    } catch (err) {
+      setError(err.response?.data?.message || "שגיאה בטעינת נתוני נגר");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadData();
+  }, []);
+
+  const waitingForWork = useMemo(
+    () => orders.filter((o) => o.status === "READY_FOR_SHIPPING" && !o.receivedByCarpenter && !o.carpenterCompletedAt),
+    [orders]
+  );
+  const activeWork = useMemo(
+    () => orders.filter((o) => o.status === "IN_PROGRESS" && !o.carpenterPaused),
+    [orders]
+  );
+  const pausedWork = useMemo(
+    () => orders.filter((o) => o.carpenterPaused),
+    [orders]
+  );
+  const woodMaterials = useMemo(
+    () => materials.filter((m) => m.isMaterial && m.materialType === "wood"),
+    [materials]
+  );
+  const fabricMaterials = useMemo(
+    () => materials.filter((m) => m.isMaterial && m.materialType === "fabric"),
+    [materials]
+  );
+  const doneWaitingDriver = useMemo(
+    () => orders.filter((o) => o.status === "READY_FOR_SHIPPING" && !!o.carpenterCompletedAt),
+    [orders]
+  );
+
+  const runAction = async (requestFn) => {
+    try {
+      setSubmitLoading(true);
+      await requestFn();
+      await loadData();
+    } catch (err) {
+      setError(err.response?.data?.message || "שגיאה בביצוע הפעולה");
+    } finally {
+      setSubmitLoading(false);
+    }
+  };
+
+  const handleMarkReceived = (orderId) =>
+    runAction(() => API.patch(`/carpenter/orders/${orderId}/received`));
+
+  const handleMarkDone = (orderId) =>
+    runAction(() => API.patch(`/carpenter/orders/${orderId}/done`));
+
+  const handlePauseOrder = async () => {
+    if (!pauseDialogOrder || !pauseReason.trim()) return;
+    await runAction(() =>
+      API.patch(`/carpenter/orders/${pauseDialogOrder.orderId}/pause`, { reason: pauseReason.trim() })
+    );
+    setPauseDialogOrder(null);
+    setPauseReason("");
+  };
+
+  const handleResumeOrder = (orderId) =>
+    runAction(() => API.patch(`/carpenter/orders/${orderId}/resume`));
+
+  const openCharacterizeDialog = (product) => {
+    setCharacterizeProduct(product);
+    setCharacterizeForm({
+      estimatedWorkWeeks: product.estimatedWorkTime
+        ? Number(product.estimatedWorkTime) / HOURS_PER_WORK_WEEK
+        : "",
+      needsWoodSelection: Boolean(product.needsWoodSelection),
+      needsFabricSelection: Boolean(product.needsFabricSelection),
+      baseProducts: product.baseProducts?.length
+        ? product.baseProducts.map((b) => ({
+            product: b.product?._id || b.product || "",
+            quantity: b.quantity || 1,
+          }))
+        : [{ product: "", quantity: 1 }],
+      woodOptions: product.woodOptions?.length
+        ? product.woodOptions.map((w) => ({ materialId: "", code: w.code || "", description: w.description || "" }))
+        : [{ materialId: "", code: "", description: "" }],
+      fabricOptions: product.fabricOptions?.length
+        ? product.fabricOptions.map((f) => ({ materialId: "", code: f.code || "", description: f.description || "" }))
+        : [{ materialId: "", code: "", description: "" }],
+    });
+  };
+
+  const updateBaseProduct = (index, key, value) => {
+    setCharacterizeForm((prev) => {
+      const next = [...prev.baseProducts];
+      next[index] = { ...next[index], [key]: value };
+      return { ...prev, baseProducts: next };
+    });
+  };
+
+  const addBaseProduct = () => {
+    setCharacterizeForm((prev) => ({
+      ...prev,
+      baseProducts: [...prev.baseProducts, { product: "", quantity: 1 }],
+    }));
+  };
+
+  const removeBaseProduct = (index) => {
+    setCharacterizeForm((prev) => ({
+      ...prev,
+      baseProducts: prev.baseProducts.filter((_, i) => i !== index),
+    }));
+  };
+
+  const updateOption = (group, index, key, value) => {
+    setCharacterizeForm((prev) => {
+      const next = [...prev[group]];
+      next[index] = { ...next[index], [key]: value };
+      return { ...prev, [group]: next };
+    });
+  };
+
+  const updateOptionFromMaterial = (group, index, materialId) => {
+    const source = group === "woodOptions" ? woodMaterials : fabricMaterials;
+    const selected = source.find((m) => m._id === materialId);
+    setCharacterizeForm((prev) => {
+      const next = [...prev[group]];
+      next[index] = {
+        materialId: materialId || "",
+        code: selected?.code || "",
+        description: selected?.description || selected?.name || "",
+      };
+      return { ...prev, [group]: next };
+    });
+  };
+
+  const addOption = (group) => {
+    setCharacterizeForm((prev) => ({
+      ...prev,
+      [group]: [...prev[group], { materialId: "", code: "", description: "" }],
+    }));
+  };
+
+  const removeOption = (group, index) => {
+    setCharacterizeForm((prev) => ({
+      ...prev,
+      [group]: prev[group].filter((_, i) => i !== index),
+    }));
+  };
+
+  const handleSubmitCharacterization = async () => {
+    if (!characterizeProduct) return;
+    const cleanedBaseProducts = characterizeForm.baseProducts
+      .filter((b) => b.product && Number(b.quantity) > 0)
+      .map((b) => ({ product: b.product, quantity: Number(b.quantity) }));
+
+    if (!cleanedBaseProducts.length || !Number(characterizeForm.estimatedWorkWeeks)) {
+      setError("יש למלא זמן עבודה בשבועות ולהוסיף לפחות חומר גלם אחד");
+      return;
+    }
+
+    const cleanedWoodOptions = characterizeForm.woodOptions
+      .filter((o) => o.code?.trim() && o.description?.trim())
+      .map((o) => ({ code: o.code.trim(), description: o.description.trim() }));
+
+    const cleanedFabricOptions = characterizeForm.fabricOptions
+      .filter((o) => o.code?.trim() && o.description?.trim())
+      .map((o) => ({ code: o.code.trim(), description: o.description.trim() }));
+
+    await runAction(() =>
+      API.post(`/carpenter/characterize/${characterizeProduct._id}`, {
+        baseProducts: cleanedBaseProducts,
+        estimatedWorkTime: Number(characterizeForm.estimatedWorkWeeks) * HOURS_PER_WORK_WEEK,
+        needsWoodSelection: characterizeForm.needsWoodSelection,
+        needsFabricSelection: characterizeForm.needsFabricSelection,
+        woodOptions: cleanedWoodOptions,
+        fabricOptions: cleanedFabricOptions,
+      })
+    );
+
+    setCharacterizeProduct(null);
+  };
+
+  const handleCreateNewMaterial = async () => {
+    if (!newMaterialName.trim() || !newMaterialUnit.trim()) {
+      setError("יש למלא שם חומר ויחידת מידה");
+      return;
+    }
+    try {
+      setSubmitLoading(true);
+      const res = await API.post("/carpenter/base-products", {
+        name: newMaterialName.trim(),
+        unit: newMaterialUnit.trim(),
+        supplier: newMaterialSupplier.trim(),
+        description: newMaterialDescription.trim(),
+      });
+
+      const newProduct = res.data;
+      setMaterials((prev) => [...prev, newProduct].sort((a, b) => (a.name || "").localeCompare(b.name || "", "he")));
+
+      setCharacterizeForm((prev) => {
+        const next = [...prev.baseProducts];
+        const firstEmptyIdx = next.findIndex((b) => !b.product);
+        if (firstEmptyIdx !== -1) {
+          next[firstEmptyIdx] = { ...next[firstEmptyIdx], product: newProduct._id };
+        } else {
+          next.push({ product: newProduct._id, quantity: 1 });
+        }
+        return { ...prev, baseProducts: next };
+      });
+
+      setNewMaterialDialogOpen(false);
+      setNewMaterialName("");
+      setNewMaterialUnit("יח׳");
+      setNewMaterialSupplier("");
+      setNewMaterialDescription("");
+      setError(null);
+    } catch (err) {
+      setError(err.response?.data?.message || "שגיאה ביצירת חומר גלם חדש");
+    } finally {
+      setSubmitLoading(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <Box sx={{ display: "flex", justifyContent: "center", mt: 8 }}>
+        <CircularProgress sx={{ color: "#D2691E" }} />
+      </Box>
+    );
+  }
+
+  return (
+    <Box sx={{ width: "100%" }}>
+      <Typography sx={{ fontSize: 22, fontWeight: 700, color: "#3E2723", mb: 3 }}>
+        דשבורד נגר
+      </Typography>
+
+      {error && (
+        <Alert severity="error" sx={{ mb: 2 }}>
+          {error}
+        </Alert>
+      )}
+
+      <Grid container spacing={2.2}>
+        <Grid item xs={12} md={6}>
+          <Card sx={cardSx}>
+            <CardContent>
+              <Typography sx={sectionTitleSx}>הזמנות שממתינות לתחילת עבודה</Typography>
+              {waitingForWork.length === 0 ? (
+                <Alert severity="info">אין כרגע הזמנות שממתינות להתחלה</Alert>
+              ) : (
+                waitingForWork.map((o) => (
+                  <Box key={o.orderId} sx={{ p: 1.2, mb: 1.2, border: "1px solid #EFE0D4", borderRadius: 2 }}>
+                    <Typography sx={{ fontWeight: 600, fontSize: 14 }}>{o.customerName}</Typography>
+                    <Typography sx={{ fontSize: 12, color: "#7B6A5F", mb: 1 }}>
+                      הזמנה #{o.orderId}
+                    </Typography>
+                    <Button
+                      size="small"
+                      variant="contained"
+                      disabled={submitLoading}
+                      sx={{ bgcolor: "#A0522D", "&:hover": { bgcolor: "#7B3F1A" } }}
+                      onClick={() => handleMarkReceived(o.orderId)}
+                    >
+                      אישור קבלת סחורה (מעבר ל"בעבודה")
+                    </Button>
+                  </Box>
+                ))
+              )}
+            </CardContent>
+          </Card>
+        </Grid>
+
+        <Grid item xs={12} md={6}>
+          <Card sx={cardSx}>
+            <CardContent>
+              <Typography sx={sectionTitleSx}>עבודות פעילות (בעבודה)</Typography>
+              {activeWork.length === 0 ? (
+                <Alert severity="info">אין כרגע עבודות פעילות</Alert>
+              ) : (
+                activeWork.map((o) => (
+                  <Box key={o.orderId} sx={{ p: 1.2, mb: 1.2, border: "1px solid #EFE0D4", borderRadius: 2 }}>
+                    <Typography sx={{ fontWeight: 600, fontSize: 14 }}>{o.customerName}</Typography>
+                    <Typography sx={{ fontSize: 12, color: "#7B6A5F", mb: 1 }}>
+                      הזמנה #{o.orderId}
+                    </Typography>
+                    <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap" }}>
+                      <Button
+                        size="small"
+                        variant="contained"
+                        disabled={submitLoading}
+                        sx={{ bgcolor: "#2E7D32", "&:hover": { bgcolor: "#1B5E20" } }}
+                        onClick={() => handleMarkDone(o.orderId)}
+                      >
+                        סיום עבודה (ממתין למוביל)
+                      </Button>
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        disabled={submitLoading}
+                        color="error"
+                        onClick={() => setPauseDialogOrder(o)}
+                      >
+                        השהיה בשל תקלה
+                      </Button>
+                    </Box>
+                  </Box>
+                ))
+              )}
+            </CardContent>
+          </Card>
+        </Grid>
+
+        <Grid item xs={12} md={6}>
+          <Card sx={cardSx}>
+            <CardContent>
+              <Typography sx={sectionTitleSx}>עבודות שסיימתי וממתינות למוביל</Typography>
+              {doneWaitingDriver.length === 0 ? (
+                <Alert severity="info">אין כרגע עבודות שממתינות למוביל</Alert>
+              ) : (
+                doneWaitingDriver.map((o) => (
+                  <Box key={o.orderId} sx={{ p: 1.2, mb: 1.2, border: "1px solid #EFE0D4", borderRadius: 2 }}>
+                    <Typography sx={{ fontWeight: 600, fontSize: 14 }}>{o.customerName}</Typography>
+                    <Typography sx={{ fontSize: 12, color: "#7B6A5F" }}>
+                      הזמנה #{o.orderId}
+                    </Typography>
+                  </Box>
+                ))
+              )}
+            </CardContent>
+          </Card>
+        </Grid>
+
+        <Grid item xs={12} md={6}>
+          <Card sx={cardSx}>
+            <CardContent>
+              <Typography sx={sectionTitleSx}>מוצרי קטלוג הממתינים לאפיון</Typography>
+              {catalogProducts.length === 0 ? (
+                <Alert severity="info">אין כרגע מוצרים שממתינים לאפיון</Alert>
+              ) : (
+                catalogProducts.map((p) => (
+                  <Box key={p._id} sx={{ p: 1.2, mb: 1.2, border: "1px solid #EFE0D4", borderRadius: 2 }}>
+                    <Typography sx={{ fontWeight: 600, fontSize: 14 }}>{p.name}</Typography>
+                    <Typography sx={{ fontSize: 12, color: "#7B6A5F", mb: 1 }}>{p.description || "ללא תיאור"}</Typography>
+                    <Button
+                      size="small"
+                      variant="contained"
+                      disabled={submitLoading}
+                      onClick={() => openCharacterizeDialog(p)}
+                      sx={{ bgcolor: "#6D4C41", "&:hover": { bgcolor: "#4E342E" } }}
+                    >
+                      אפיין מוצר
+                    </Button>
+                  </Box>
+                ))
+              )}
+            </CardContent>
+          </Card>
+        </Grid>
+
+        <Grid item xs={12}>
+          <Card sx={cardSx}>
+            <CardContent>
+              <Typography sx={sectionTitleSx}>עבודות מושהות בשל תקלה</Typography>
+              {pausedWork.length === 0 ? (
+                <Alert severity="info">אין כרגע עבודות מושהות</Alert>
+              ) : (
+                pausedWork.map((o) => (
+                  <Box key={o.orderId} sx={{ p: 1.2, mb: 1.2, border: "1px solid #F5C6CB", borderRadius: 2 }}>
+                    <Typography sx={{ fontWeight: 600, fontSize: 14 }}>{o.customerName}</Typography>
+                    <Typography sx={{ fontSize: 12, color: "#7B6A5F" }}>הזמנה #{o.orderId}</Typography>
+                    <Typography sx={{ fontSize: 12, color: "#B00020", mt: 0.6 }}>
+                      סיבת תקלה: {o.carpenterPauseReason || "לא צוינה"}
+                    </Typography>
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      sx={{ mt: 1 }}
+                      disabled={submitLoading}
+                      onClick={() => handleResumeOrder(o.orderId)}
+                    >
+                      חידוש עבודה
+                    </Button>
+                  </Box>
+                ))
+              )}
+            </CardContent>
+          </Card>
+        </Grid>
+      </Grid>
+
+      <Dialog open={!!pauseDialogOrder} onClose={() => setPauseDialogOrder(null)} maxWidth="sm" fullWidth>
+        <DialogTitle>השהיית עבודה בשל תקלה</DialogTitle>
+        <DialogContent>
+          <TextField
+            autoFocus
+            fullWidth
+            multiline
+            minRows={3}
+            value={pauseReason}
+            onChange={(e) => setPauseReason(e.target.value)}
+            label="סיבת התקלה"
+            sx={{ mt: 1 }}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setPauseDialogOrder(null)}>ביטול</Button>
+          <Button variant="contained" color="error" onClick={handlePauseOrder} disabled={submitLoading || !pauseReason.trim()}>
+            אשר השהיה
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={!!characterizeProduct}
+        onClose={() => setCharacterizeProduct(null)}
+        maxWidth="md"
+        fullWidth
+      >
+        <DialogTitle>אפיון מוצר: {characterizeProduct?.name}</DialogTitle>
+        <DialogContent dividers>
+          <Box sx={{ display: "flex", flexDirection: "column", gap: 2, mt: 1 }}>
+            {characterizeProduct?.image && (
+              <Box sx={{ borderRadius: 2, overflow: "hidden", height: 220, border: "1px solid #E5D5C8" }}>
+                <img
+                  src={`${BASE_URL}${characterizeProduct.image}`}
+                  alt={characterizeProduct.name}
+                  style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                />
+              </Box>
+            )}
+            <TextField
+              label="תיאור מוצר (מהמנהל)"
+              value={characterizeProduct?.description || ""}
+              multiline
+              minRows={2}
+              InputProps={{ readOnly: true }}
+            />
+            <TextField
+              label="זמן עבודה משוער (שבועות)"
+              type="number"
+              inputProps={{ min: 0, step: 0.5 }}
+              value={characterizeForm.estimatedWorkWeeks}
+              onChange={(e) => setCharacterizeForm((prev) => ({ ...prev, estimatedWorkWeeks: e.target.value }))}
+            />
+
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={characterizeForm.needsWoodSelection}
+                  onChange={(e) =>
+                    setCharacterizeForm((prev) => ({ ...prev, needsWoodSelection: e.target.checked }))
+                  }
+                />
+              }
+              label="נדרש לבחור סוג עץ ללקוח"
+            />
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={characterizeForm.needsFabricSelection}
+                  onChange={(e) =>
+                    setCharacterizeForm((prev) => ({ ...prev, needsFabricSelection: e.target.checked }))
+                  }
+                />
+              }
+              label="נדרש לבחור סוג בד ללקוח"
+            />
+
+            <Box>
+              <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mb: 1 }}>
+                <Typography sx={{ fontWeight: 700 }}>חומרי גלם נדרשים</Typography>
+                <Button size="small" variant="outlined" onClick={() => setNewMaterialDialogOpen(true)}>
+                  הוסף חומר גלם חדש
+                </Button>
+              </Box>
+              {characterizeForm.baseProducts.map((item, index) => (
+                <Box key={`bp-${index}`} sx={{ display: "flex", gap: 1, mb: 1 }}>
+                  <TextField
+                    select
+                    fullWidth
+                    label="חומר גלם"
+                    value={item.product}
+                    onChange={(e) => updateBaseProduct(index, "product", e.target.value)}
+                  >
+                    {materials.map((m) => (
+                      <MenuItem key={m._id} value={m._id}>
+                        {m.code ? `${m.code} - ${m.name}` : m.name} {m.unit ? `(${m.unit})` : ""}
+                      </MenuItem>
+                    ))}
+                  </TextField>
+                  <TextField
+                    label="כמות"
+                    type="number"
+                    sx={{ width: 120 }}
+                    value={item.quantity}
+                    onChange={(e) => updateBaseProduct(index, "quantity", e.target.value)}
+                  />
+                  <IconButton
+                    color="error"
+                    onClick={() => removeBaseProduct(index)}
+                    disabled={characterizeForm.baseProducts.length === 1}
+                  >
+                    <DeleteIcon />
+                  </IconButton>
+                </Box>
+              ))}
+              <Button startIcon={<AddIcon />} onClick={addBaseProduct} size="small">
+                הוסף חומר גלם
+              </Button>
+            </Box>
+
+            <Box>
+              <Typography sx={{ fontWeight: 700, mb: 1 }}>אפשרויות עץ</Typography>
+              {characterizeForm.woodOptions.map((item, index) => (
+                <Box key={`wo-${index}`} sx={{ display: "flex", gap: 1, mb: 1 }}>
+                  <TextField
+                    select
+                    fullWidth
+                    label="בחר עץ קיים"
+                    value={item.materialId || ""}
+                    onChange={(e) => updateOptionFromMaterial("woodOptions", index, e.target.value)}
+                  >
+                    {woodMaterials.map((m) => (
+                      <MenuItem key={m._id} value={m._id}>
+                        {m.code ? `${m.code} - ${m.name}` : m.name}
+                      </MenuItem>
+                    ))}
+                  </TextField>
+                  <TextField
+                    label="קוד"
+                    value={item.code}
+                    onChange={(e) => updateOption("woodOptions", index, "code", e.target.value)}
+                    sx={{ width: 150 }}
+                  />
+                  <TextField
+                    fullWidth
+                    label="תיאור"
+                    value={item.description}
+                    onChange={(e) => updateOption("woodOptions", index, "description", e.target.value)}
+                  />
+                  <IconButton
+                    color="error"
+                    onClick={() => removeOption("woodOptions", index)}
+                    disabled={characterizeForm.woodOptions.length === 1}
+                  >
+                    <DeleteIcon />
+                  </IconButton>
+                </Box>
+              ))}
+              <Button startIcon={<AddIcon />} onClick={() => addOption("woodOptions")} size="small">
+                הוסף אפשרות עץ
+              </Button>
+            </Box>
+
+            <Box>
+              <Typography sx={{ fontWeight: 700, mb: 1 }}>אפשרויות בד</Typography>
+              {characterizeForm.fabricOptions.map((item, index) => (
+                <Box key={`fo-${index}`} sx={{ display: "flex", gap: 1, mb: 1 }}>
+                  <TextField
+                    select
+                    fullWidth
+                    label="בחר בד קיים"
+                    value={item.materialId || ""}
+                    onChange={(e) => updateOptionFromMaterial("fabricOptions", index, e.target.value)}
+                  >
+                    {fabricMaterials.map((m) => (
+                      <MenuItem key={m._id} value={m._id}>
+                        {m.code ? `${m.code} - ${m.name}` : m.name}
+                      </MenuItem>
+                    ))}
+                  </TextField>
+                  <TextField
+                    label="קוד"
+                    value={item.code}
+                    onChange={(e) => updateOption("fabricOptions", index, "code", e.target.value)}
+                    sx={{ width: 150 }}
+                  />
+                  <TextField
+                    fullWidth
+                    label="תיאור"
+                    value={item.description}
+                    onChange={(e) => updateOption("fabricOptions", index, "description", e.target.value)}
+                  />
+                  <IconButton
+                    color="error"
+                    onClick={() => removeOption("fabricOptions", index)}
+                    disabled={characterizeForm.fabricOptions.length === 1}
+                  >
+                    <DeleteIcon />
+                  </IconButton>
+                </Box>
+              ))}
+              <Button startIcon={<AddIcon />} onClick={() => addOption("fabricOptions")} size="small">
+                הוסף אפשרות בד
+              </Button>
+            </Box>
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setCharacterizeProduct(null)}>ביטול</Button>
+          <Button variant="contained" disabled={submitLoading} onClick={handleSubmitCharacterization}>
+            שמירה ושליחה לאישור מנהל
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={newMaterialDialogOpen} onClose={() => setNewMaterialDialogOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>הוספת חומר גלם חדש (לאספקה ראשונית)</DialogTitle>
+        <DialogContent>
+          <Box sx={{ display: "flex", flexDirection: "column", gap: 1.5, mt: 1 }}>
+            <TextField
+              label="שם חומר גלם"
+              fullWidth
+              value={newMaterialName}
+              onChange={(e) => setNewMaterialName(e.target.value)}
+            />
+            <TextField
+              label="יחידת מידה"
+              fullWidth
+              value={newMaterialUnit}
+              onChange={(e) => setNewMaterialUnit(e.target.value)}
+              placeholder='למשל: יח׳ / מטר / ק"ג'
+            />
+            <TextField
+              label="ספק (אופציונלי)"
+              fullWidth
+              value={newMaterialSupplier}
+              onChange={(e) => setNewMaterialSupplier(e.target.value)}
+            />
+            <TextField
+              label="תיאור (אופציונלי)"
+              fullWidth
+              multiline
+              minRows={2}
+              value={newMaterialDescription}
+              onChange={(e) => setNewMaterialDescription(e.target.value)}
+            />
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setNewMaterialDialogOpen(false)}>ביטול</Button>
+          <Button variant="contained" onClick={handleCreateNewMaterial} disabled={submitLoading}>
+            שמור חומר חדש
+          </Button>
+        </DialogActions>
+      </Dialog>
+    </Box>
+  );
+};
+
+export default CarpenterDashboard;
