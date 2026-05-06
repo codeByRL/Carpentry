@@ -25,8 +25,8 @@ export const calculateEstimatedDeliveryDate = (workloadHours) => {
  *   items: [
  *     {
  *       catalogProductId, // או catalogProduct
+ *       productType, // סוג מוצר שנבחר בטופס (לצורך התאמות אופציונליות)
  *       quantity,
- *       selectedWood, // optional, object or id (e.g. { materialId } or materialId string)
  *       selectedFabric, // optional
  *       notes
  *     },
@@ -58,33 +58,10 @@ export const createOrder = async (orderData) => {
       const quantity = Number(item.quantity || 1);
       if (quantity <= 0) throw new Error("Quantity must be >= 1");
 
-      // בדיקות בחירת חומרים אם נדרש
-      let chosenWoodSnapshot = null;
-      if (product.needsWoodSelection) {
-        const woodSel = item.selectedWood;
-        if (!woodSel) throw new Error(`מוצר "${product.name}" דורש בחירת עץ`);
-        // תמיכה ב־id או באובייקט { materialId }
-        let mat = null;
-        const matId = typeof woodSel === 'string' ? woodSel : (woodSel.materialId || woodSel._id);
-        if (matId) {
-          mat = await BaseProduct.findById(matId);
-        } else if (woodSel.code) {
-          mat = await BaseProduct.findOne({ isMaterial: true, materialType: 'wood', code: woodSel.code });
-        }
-        if (!mat || !mat.isMaterial || mat.materialType !== 'wood') {
-          throw new Error(`אפשרות עץ לא חוקית עבור "${product.name}"`);
-        }
-        chosenWoodSnapshot = { materialId: mat._id, code: mat.code, name: mat.name, priceDelta: mat.priceDelta || 0 };
-        // הוספת לכמות נדרשת
-        const key = mat._id.toString();
-        const neededQty = 1 * quantity; // הנחה: בחירת חומר מצריכה 1 יח' ממנו; ניתן לשנות לפי מיפוי מדויק
-        requiredMaterialsMap.set(key, (requiredMaterialsMap.get(key) || 0) + neededQty);
-      }
-
       let chosenFabricSnapshot = null;
-      if (product.needsFabricSelection) {
+      const supportsUpholstery = ["מיטה", "כסא"].includes(String(item.productType || "").trim());
+      if (supportsUpholstery && product.needsFabricSelection && item.selectedFabric) {
         const fabSel = item.selectedFabric;
-        if (!fabSel) throw new Error(`מוצר "${product.name}" דורש בחירת בד`);
         let mat2 = null;
         const mat2Id = typeof fabSel === 'string' ? fabSel : (fabSel.materialId || fabSel._id);
         if (mat2Id) {
@@ -102,7 +79,7 @@ export const createOrder = async (orderData) => {
       }
 
       // חישוב מחיר פריט (יחידה)
-      const unitPrice = Number(product.price || 0) + (chosenWoodSnapshot?.priceDelta || 0) + (chosenFabricSnapshot?.priceDelta || 0);
+      const unitPrice = Number(product.price || 0) + (chosenFabricSnapshot?.priceDelta || 0);
       totalBasePrice += unitPrice * quantity;
 
       // הוספת baseProducts הקבועים שמופיעים במוצר
@@ -119,7 +96,6 @@ export const createOrder = async (orderData) => {
         catalogProduct: product._id,
         quantity,
         selectedCustomization: {
-          wood: chosenWoodSnapshot ? { code: chosenWoodSnapshot.code, description: chosenWoodSnapshot.name } : undefined,
           fabric: chosenFabricSnapshot ? { code: chosenFabricSnapshot.code, description: chosenFabricSnapshot.name } : undefined,
           notes: item.notes || ''
         },

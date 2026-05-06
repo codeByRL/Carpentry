@@ -48,6 +48,7 @@ const getChatHistory = async (user1, user2) => {
  * מחזיר רשימת משתמשים ששלחו הודעות וסטטוס קריאה
  */
 const getActiveChats = async (userId) => {
+  const currentUserId = userId.toString();
   // מוצא את כל ההודעות שקשורות למשתמש
   const messages = await Message.find({
     $or: [{ sender: userId }, { receiver: userId }]
@@ -56,18 +57,21 @@ const getActiveChats = async (userId) => {
   const chatPartners = new Map();
 
   messages.forEach(msg => {
-    const partnerId = msg.sender.toString() === userId.toString() 
+    const partnerId = msg.sender.toString() === currentUserId 
       ? msg.receiver.toString() 
       : msg.sender.toString();
+
+    // הודעות "לעצמי" לא אמורות להיחשב כצ'אט פעיל ולא כ-unread.
+    if (partnerId === currentUserId) return;
     
     if (!chatPartners.has(partnerId)) {
       chatPartners.set(partnerId, {
         lastMessage: msg.content,
         lastUpdate: msg.createdAt,
-        unreadCount: (msg.receiver.toString() === userId.toString() && !msg.isRead) ? 1 : 0,
+        unreadCount: (msg.receiver.toString() === currentUserId && !msg.isRead) ? 1 : 0,
         partnerId
       });
-    } else if (msg.receiver.toString() === userId.toString() && !msg.isRead) {
+    } else if (msg.receiver.toString() === currentUserId && !msg.isRead) {
       chatPartners.get(partnerId).unreadCount++;
     }
   });
@@ -76,6 +80,7 @@ const getActiveChats = async (userId) => {
   const results = [];
   for (let [id, data] of chatPartners) {
     const user = await User.findById(id).select("fullName role");
+    if (!user) continue;
     results.push({ ...data, partnerName: user.fullName, partnerRole: user.role });
   }
 

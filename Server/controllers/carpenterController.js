@@ -221,11 +221,7 @@ export const submitCharacterization = async (req, res) => {
     const { productId } = req.params;
     const { 
       baseProducts, 
-      estimatedWorkTime,
-      woodOptions,        // 🆕 רשימת קודי עץ
-      fabricOptions,      // 🆕 רשימת קודי בד
-      needsWoodSelection, 
-      needsFabricSelection 
+      estimatedWorkTime
     } = req.body;
 
     const product = await CatalogProduct.findById(productId);
@@ -238,11 +234,9 @@ export const submitCharacterization = async (req, res) => {
     product.baseProducts = baseProducts;
     product.estimatedWorkTime = estimatedWorkTime;
     
-    // 🆕 שמירת אופציות ההתאמה האישית
-    product.woodOptions = woodOptions || [];
-    product.fabricOptions = fabricOptions || [];
-    product.needsWoodSelection = needsWoodSelection || false;
-    product.needsFabricSelection = needsFabricSelection || false;
+    // אפשרויות עץ לא מנוהלות יותר בטופס האפיון
+    product.woodOptions = [];
+    product.needsWoodSelection = false;
     
     product.status = "WAITING_ADMIN_APPROVAL";
     

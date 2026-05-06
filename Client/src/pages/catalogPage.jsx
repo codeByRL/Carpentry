@@ -40,6 +40,13 @@ const DARK      = '#3E2723';
 const LIGHT_BG  = '#FBF0E9';
 const BORDER    = '#E8C9B0';
 const BASE_URL  = import.meta.env.VITE_REACT_APP_API_URL || 'http://localhost:5001';
+const PRODUCT_CATEGORIES = ['מיטה', 'ארון', 'שידה', 'ספה', 'שולחן', 'כסא'];
+
+const getProductCategory = (name = '') => {
+  const n = String(name || '').trim();
+  const match = PRODUCT_CATEGORIES.find((c) => n.includes(c));
+  return match || 'אחר';
+};
 
 const Field = ({ label, value }) =>
   value ? (
@@ -66,7 +73,8 @@ const CatalogPage = () => {
   const [aiPrompt, setAiPrompt]           = useState('');
   const [imagePreview, setImagePreview]   = useState(null);
   const [imageFile, setImageFile]         = useState(null);
-  const [managerFilter, setManagerFilter] = useState('ALL');
+  const [managerFilter, setManagerFilter] = useState('ACTIVE');
+  const [categoryFilter, setCategoryFilter] = useState('ALL');
   const [showFabricForm, setShowFabricForm] = useState(false);
   const [newFabricForm, setNewFabricForm] = useState({
     name: '',
@@ -84,7 +92,7 @@ const CatalogPage = () => {
 
   const [newForm, setNewForm] = useState({
     name: '', description: '', carpenterId: '',
-    needsWoodSelection: false, needsFabricSelection: false,
+    needsFabricSelection: false,
   });
 
   const [editForm, setEditForm] = useState({});
@@ -152,7 +160,7 @@ const CatalogPage = () => {
     const fd = new FormData();
     fd.append('name', newForm.name);
     fd.append('description', newForm.description);
-    fd.append('needsWoodSelection', newForm.needsWoodSelection);
+    fd.append('needsWoodSelection', false);
     fd.append('needsFabricSelection', newForm.needsFabricSelection);
     if (imageFile) fd.append('image', imageFile);
     else if (generatedImageUrl) fd.append('imageUrl', generatedImageUrl);
@@ -167,7 +175,7 @@ const CatalogPage = () => {
         }));
       }
       setShowNewForm(false);
-      setNewForm({ name: '', description: '', carpenterId: '', needsWoodSelection: false, needsFabricSelection: false });
+      setNewForm({ name: '', description: '', carpenterId: '', needsFabricSelection: false });
       setImagePreview(null);
       setImageFile(null);
       setAiPrompt('');
@@ -182,7 +190,6 @@ const CatalogPage = () => {
       description: p.description || '',
       price: p.price || '',
       estimatedWorkTime: p.estimatedWorkTime || '',
-      needsWoodSelection: p.needsWoodSelection || false,
       needsFabricSelection: p.needsFabricSelection || false,
     });
     // ✅ תוקן: BASE_URL במקום localhost:5000
@@ -193,6 +200,7 @@ const CatalogPage = () => {
   const handleEditSubmit = () => {
     const fd = new FormData();
     Object.entries(editForm).forEach(([k, v]) => fd.append(k, v));
+    fd.append('needsWoodSelection', false);
     if (imageFile) fd.append('image', imageFile);
     dispatch(updateCatalogProduct({ productId: editProduct._id, formData: fd })).then(r => {
       if (!r.error) { setEditProduct(null); setImagePreview(null); setImageFile(null); }
@@ -260,17 +268,28 @@ const CatalogPage = () => {
     ? products.filter((p) => managerFilter === 'ALL' ? true : p.status === managerFilter)
     : products;
 
+  const filteredByCategoryProducts = visibleProducts.filter((p) =>
+    categoryFilter === 'ALL' ? true : getProductCategory(p.name) === categoryFilter
+  );
+
   const statusCounts = {
     PENDING_CHARACTERIZATION: products.filter((p) => p.status === 'PENDING_CHARACTERIZATION').length,
     WAITING_ADMIN_APPROVAL: products.filter((p) => p.status === 'WAITING_ADMIN_APPROVAL').length,
     ACTIVE: products.filter((p) => p.status === 'ACTIVE').length,
   };
+  const categoryCounts = {
+    ALL: visibleProducts.length,
+    ...PRODUCT_CATEGORIES.reduce((acc, c) => {
+      acc[c] = visibleProducts.filter((p) => getProductCategory(p.name) === c).length;
+      return acc;
+    }, {}),
+    אחר: visibleProducts.filter((p) => getProductCategory(p.name) === 'אחר').length,
+  };
 
   return (
     <Box sx={{ width: '100%' }}>
 
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
-        <Typography sx={{ fontSize: 21, fontWeight: 700, color: DARK }}>קטלוג מוצרים</Typography>
+      <Box sx={{ mb: 3 }}>
         {isManager && (
           <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 1, width: '100%' }}>
             <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
@@ -315,6 +334,48 @@ const CatalogPage = () => {
             </Box>
           </Box>
         )}
+        <Typography
+          sx={{
+            fontSize: 21,
+            fontWeight: 700,
+            color: DARK,
+            textAlign: 'center',
+            whiteSpace: 'nowrap',
+            width: '100%',
+            mt: isManager ? 2 : 0,
+          }}
+        >
+          קטלוג מוצרים
+        </Typography>
+        <Box sx={{ mt: 1.5, display: 'flex', gap: 1, flexWrap: 'wrap', justifyContent: 'center' }}>
+          <Button
+            size="small"
+            variant={categoryFilter === 'ALL' ? 'contained' : 'outlined'}
+            onClick={() => setCategoryFilter('ALL')}
+            sx={{ fontSize: 11.5, borderRadius: 2 }}
+          >
+            הכל ({categoryCounts.ALL})
+          </Button>
+          {PRODUCT_CATEGORIES.map((cat) => (
+            <Button
+              key={cat}
+              size="small"
+              variant={categoryFilter === cat ? 'contained' : 'outlined'}
+              onClick={() => setCategoryFilter(cat)}
+              sx={{ fontSize: 11.5, borderRadius: 2 }}
+            >
+              {cat} ({categoryCounts[cat] || 0})
+            </Button>
+          ))}
+          <Button
+            size="small"
+            variant={categoryFilter === 'אחר' ? 'contained' : 'outlined'}
+            onClick={() => setCategoryFilter('אחר')}
+            sx={{ fontSize: 11.5, borderRadius: 2 }}
+          >
+            אחר ({categoryCounts['אחר'] || 0})
+          </Button>
+        </Box>
       </Box>
       {fabricCreateResult && (
         <Alert severity={fabricCreateResult.includes('בהצלחה') ? 'success' : 'error'} sx={{ mb: 2 }}>
@@ -333,19 +394,19 @@ const CatalogPage = () => {
         </Alert>
       )}
 
-      {visibleProducts.length === 0 ? (
+      {filteredByCategoryProducts.length === 0 ? (
         <Alert severity="info" sx={{ borderRadius: 2 }}>
-          {isManager && managerFilter === 'PENDING_CHARACTERIZATION'
+          {isManager && managerFilter === 'PENDING_CHARACTERIZATION' && categoryFilter === 'ALL'
             ? 'אין מוצרים לאפיון'
-            : isManager && managerFilter === 'WAITING_ADMIN_APPROVAL'
+            : isManager && managerFilter === 'WAITING_ADMIN_APPROVAL' && categoryFilter === 'ALL'
               ? 'אין מוצרים הממתינים לאישור'
-              : isManager && managerFilter === 'ACTIVE'
+              : isManager && managerFilter === 'ACTIVE' && categoryFilter === 'ALL'
                 ? 'אין מוצרים פעילים'
-                : 'אין מוצרים להצגה'}
+                : 'אין מוצרים להצגה בקטגוריה שנבחרה'}
         </Alert>
       ) : (
         <Grid container spacing={2}>
-          {visibleProducts.map(p => (
+          {filteredByCategoryProducts.map(p => (
             <Grid size={{ xs: 12, sm: 6, md: 4, lg: 3 }} key={p._id}>
               <Paper sx={{
                 borderRadius: 3, overflow: 'hidden', boxShadow: 'none',
@@ -359,7 +420,7 @@ const CatalogPage = () => {
                   {/* ✅ תוקן: BASE_URL */}
                   {p.image
                     ? <img src={`${BASE_URL}${p.image}`} alt={p.name}
-                        style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                        style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
                     : <Typography sx={{ color: '#C4A882', fontSize: 13 }}>אין תמונה</Typography>
                   }
                 </Box>
@@ -425,7 +486,7 @@ const CatalogPage = () => {
               <Box sx={{ mb: 2, borderRadius: 2, overflow: 'hidden', height: 200 }}>
                 {/* ✅ תוקן: BASE_URL */}
                 <img src={`${BASE_URL}${detailProduct.image}`} alt={detailProduct.name}
-                  style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                  style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
               </Box>
             )}
             <Field label="תיאור" value={detailProduct.description} />
@@ -502,7 +563,7 @@ const CatalogPage = () => {
             )}
             {imagePreview && (
               <Box sx={{ borderRadius: 2, overflow: 'hidden', height: 140, border: `1px solid ${BORDER}` }}>
-                <img src={imagePreview} alt="preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                <img src={imagePreview} alt="preview" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
               </Box>
             )}
           </Box>
@@ -517,15 +578,10 @@ const CatalogPage = () => {
           </TextField>
           <Divider />
           <FormControlLabel
-            control={<Switch checked={newForm.needsWoodSelection}
-              onChange={e => setNewForm(f => ({ ...f, needsWoodSelection: e.target.checked }))}
-              sx={{ '& .MuiSwitch-thumb': { bgcolor: WOOD_COLOR } }} />}
-            label={<Typography sx={{ fontSize: 13 }}>דורש בחירת סוג עץ</Typography>} />
-          <FormControlLabel
             control={<Switch checked={newForm.needsFabricSelection}
               onChange={e => setNewForm(f => ({ ...f, needsFabricSelection: e.target.checked }))}
               sx={{ '& .MuiSwitch-thumb': { bgcolor: WOOD_COLOR } }} />}
-            label={<Typography sx={{ fontSize: 13 }}>דורש בחירת בד</Typography>} />
+            label={<Typography sx={{ fontSize: 13 }}>דורש בחירת בד: {newForm.needsFabricSelection ? 'כן' : 'לא'}</Typography>} />
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2 }}>
           <Button onClick={() => setShowNewForm(false)} sx={{ color: '#A1887F', fontSize: 12 }}>ביטול</Button>
@@ -562,19 +618,15 @@ const CatalogPage = () => {
             </Button>
             {imagePreview && (
               <Box sx={{ borderRadius: 2, overflow: 'hidden', height: 140, border: `1px solid ${BORDER}` }}>
-                <img src={imagePreview} alt="preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                <img src={imagePreview} alt="preview" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
               </Box>
             )}
           </Box>
           <Divider />
           <FormControlLabel
-            control={<Switch checked={editForm.needsWoodSelection || false}
-              onChange={e => setEditForm(f => ({ ...f, needsWoodSelection: e.target.checked }))} />}
-            label={<Typography sx={{ fontSize: 13 }}>דורש בחירת סוג עץ</Typography>} />
-          <FormControlLabel
             control={<Switch checked={editForm.needsFabricSelection || false}
               onChange={e => setEditForm(f => ({ ...f, needsFabricSelection: e.target.checked }))} />}
-            label={<Typography sx={{ fontSize: 13 }}>דורש בחירת בד</Typography>} />
+            label={<Typography sx={{ fontSize: 13 }}>דורש בחירת בד: {editForm.needsFabricSelection ? 'כן' : 'לא'}</Typography>} />
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2 }}>
           <Button onClick={() => setEditProduct(null)} sx={{ color: '#A1887F', fontSize: 12 }}>ביטול</Button>
@@ -615,7 +667,7 @@ const CatalogPage = () => {
               <img
                 src={`${BASE_URL}${approveTarget.image}`}
                 alt={approveTarget.name}
-                style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                style={{ width: '100%', height: '100%', objectFit: 'contain' }}
               />
             </Box>
           )}
@@ -794,7 +846,7 @@ const CatalogPage = () => {
                     <Box sx={{ height: 120, borderRadius: 1.5, overflow: 'hidden', bgcolor: LIGHT_BG, mb: 1 }}>
                       {f.image ? (
                         <img src={`${BASE_URL}${f.image}`} alt={f.name}
-                          style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                          style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
                       ) : (
                         <Box sx={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                           <Typography sx={{ fontSize: 11, color: '#A1887F' }}>אין תמונה</Typography>

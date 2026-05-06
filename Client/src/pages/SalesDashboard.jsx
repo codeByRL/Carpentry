@@ -12,7 +12,7 @@ import ChatIcon from '@mui/icons-material/Chat';
 import DeleteIcon from '@mui/icons-material/Delete';
 import AddIcon from '@mui/icons-material/Add';
 
-import { fetchOrdersForSales, markOrderAsPaid, createOrder, clearSubmitError } from '../store/slices/ordersSlice';
+import { fetchOrdersForSales, markOrderAsPaid, confirmQuotationOrder, createOrder, clearSubmitError } from '../store/slices/ordersSlice';
 import { fetchNotifications, markNotificationRead } from '../store/slices/notificationsSlice';
 import { fetchActiveChatPartners } from '../store/slices/chatSlice';
 import API from '../services/api';
@@ -98,14 +98,15 @@ const SalesDashboard = () => {
     deliveryAddress: '', invoiceName: '',
     orderDate: new Date().toISOString().slice(0, 10),
     estimatedDeliveryDate: '',
-    items: [{ productType: '', catalogProductId: '', quantity: 1, selectedWood: '', selectedFabric: '' }]
+    items: [{ productType: '', catalogProductId: '', quantity: 1, selectedFabric: '' }]
   });
   const [orderFormErrors, setOrderFormErrors] = useState({});
   const [activeCatalog, setActiveCatalog] = useState([]);
-  const [woodMaterials, setWoodMaterials] = useState([]);
   const [fabricMaterials, setFabricMaterials] = useState([]);
   const [deliveryDateManuallyEdited, setDeliveryDateManuallyEdited] = useState(false);
   const [submitHint, setSubmitHint] = useState('');
+  const [salesView, setSalesView] = useState('COLLECTION'); // COLLECTION | QUOTATION | ACTIVE
+  const [selectedOrder, setSelectedOrder] = useState(null);
 
   useEffect(() => {
     dispatch(fetchActiveChatPartners());
@@ -114,13 +115,10 @@ const SalesDashboard = () => {
     API.get('/catalog/active')
       .then((res) => setActiveCatalog(res.data || []))
       .catch(() => setActiveCatalog([]));
-    Promise.all([
-      API.get('/base-products?isMaterial=true&type=wood&limit=200').then((r) => r.data || []).catch(() => []),
-      API.get('/base-products?isMaterial=true&type=fabric&limit=200').then((r) => r.data || []).catch(() => []),
-    ]).then(([w, f]) => {
-      setWoodMaterials(Array.isArray(w) ? w : []);
-      setFabricMaterials(Array.isArray(f) ? f : []);
-    });
+    API.get('/base-products?isMaterial=true&type=fabric&limit=500')
+      .then((r) => (Array.isArray(r.data) ? r.data : []))
+      .then((fabrics) => setFabricMaterials(Array.isArray(fabrics) ? fabrics : []))
+      .catch(() => setFabricMaterials([]));
   }, [dispatch]);
 
   // === פילטור הזמנות ===
@@ -134,19 +132,19 @@ const SalesDashboard = () => {
       title: 'בהצעת מחיר',
       value: quotationPendingOrders.length,
       sub: `${quotationPendingOrders.length} ממתינים לאישור`,
-      onClick: () => navigate('/sales-orders', { state: { filterStatus: 'QUOTATION_PENDING' } }),
+      onClick: () => setSalesView('QUOTATION'),
     },
     {
       title: 'הזמנות פעילות',
       value: activeOrders.length,
       sub: `${activeOrders.filter(o => o.status === 'ORDERED').length} במערכת`,
-      onClick: () => navigate('/sales-orders', { state: { filterActive: true } }),
+      onClick: () => setSalesView('ACTIVE'),
     },
     {
       title: 'בגבייה',
       value: collectionPendingOrders.length,
       sub: `${collectionPendingOrders.length} טרם שולמו`,
-      onClick: () => navigate('/sales-orders', { state: { filterPaid: false } }),
+      onClick: () => setSalesView('COLLECTION'),
     },
     {
       title: "צ'אט והתראות",
@@ -156,9 +154,27 @@ const SalesDashboard = () => {
     },
   ];
 
+  const viewMeta = {
+    COLLECTION: { title: 'הזמנות בגבייה', emoji: '💰', empty: 'אין הזמנות בגבייה כרגע.' },
+    QUOTATION: { title: 'הצעות מחיר', emoji: '📝', empty: 'אין הזמנות בהצעת מחיר כרגע.' },
+    ACTIVE: { title: 'הזמנות פעילות', emoji: '📦', empty: 'אין הזמנות פעילות כרגע.' },
+  };
+
+  const displayedOrders =
+    salesView === 'QUOTATION' ? quotationPendingOrders
+    : salesView === 'ACTIVE' ? activeOrders
+    : collectionPendingOrders;
+
   const handleMarkAsPaid = async (orderId) => {
     if (window.confirm('האם אתה בטוח שברצונך לסמן הזמנה זו כשולמה?')) {
       await dispatch(markOrderAsPaid(orderId));
+      dispatch(fetchOrdersForSales());
+    }
+  };
+
+  const handleConfirmQuotation = async (orderId) => {
+    if (window.confirm('להמיר הצעת מחיר להזמנה פעילה?')) {
+      await dispatch(confirmQuotationOrder(orderId));
       dispatch(fetchOrdersForSales());
     }
   };
@@ -176,11 +192,9 @@ const SalesDashboard = () => {
     nextItems[index] = { ...nextItems[index], [field]: value };
     if (field === 'productType') {
       nextItems[index].catalogProductId = '';
-      nextItems[index].selectedWood = '';
       nextItems[index].selectedFabric = '';
     }
     if (field === 'catalogProductId') {
-      nextItems[index].selectedWood = '';
       nextItems[index].selectedFabric = '';
     }
     setNewOrderData({ ...newOrderData, items: nextItems });
@@ -189,7 +203,7 @@ const SalesDashboard = () => {
   const addOrderItemRow = () => {
     setNewOrderData((prev) => ({
       ...prev,
-      items: [...prev.items, { productType: '', catalogProductId: '', quantity: 1, selectedWood: '', selectedFabric: '' }],
+      items: [...prev.items, { productType: '', catalogProductId: '', quantity: 1, selectedFabric: '' }],
     }));
   };
 
@@ -208,11 +222,6 @@ const SalesDashboard = () => {
     return activeCatalog.filter((p) => (p.name || '').includes(productType));
   };
 
-  const getWoodOptionsForItem = () => {
-    // כל סוגי העץ במערכת לבחירה
-    return woodMaterials;
-  };
-
   const getFabricOptionsForItem = () => {
     // כל סוגי הבד במערכת לבחירה
     return fabricMaterials;
@@ -221,12 +230,9 @@ const SalesDashboard = () => {
   const getUnitPrice = (item) => {
     const p = getProductById(item.catalogProductId);
     if (!p) return 0;
+    const supportsUpholstery = ['מיטה', 'כסא'].includes(item.productType);
     let delta = 0;
-    if (p.needsWoodSelection && item.selectedWood) {
-      const w = woodMaterials.find((m) => m._id === item.selectedWood);
-      delta += Number(w?.priceDelta || 0);
-    }
-    if (p.needsFabricSelection && item.selectedFabric) {
+    if (supportsUpholstery && p.needsFabricSelection && item.selectedFabric) {
       const f = fabricMaterials.find((m) => m._id === item.selectedFabric);
       delta += Number(f?.priceDelta || 0);
     }
@@ -325,17 +331,9 @@ const SalesDashboard = () => {
         }
       }
       const p = getProductById(item.catalogProductId);
-      if (p?.needsWoodSelection) {
-        if (!item.selectedWood) errors[`selectedWood_${idx}`] = 'בחר סוג עץ';
-        else if (!getWoodOptionsForItem().some((m) => m._id === item.selectedWood)) {
-          errors[`selectedWood_${idx}`] = 'בחירת העץ אינה תקפה למוצר זה';
-        }
-      }
-      if (p?.needsFabricSelection) {
-        if (!item.selectedFabric) errors[`selectedFabric_${idx}`] = 'בחר בד';
-        else if (!getFabricOptionsForItem().some((m) => m._id === item.selectedFabric)) {
-          errors[`selectedFabric_${idx}`] = 'בחירת הבד אינה תקפה למוצר זה';
-        }
+      const supportsUpholstery = ['מיטה', 'כסא'].includes(item.productType);
+      if (supportsUpholstery && p?.needsFabricSelection && item.selectedFabric && !getFabricOptionsForItem().some((m) => m._id === item.selectedFabric)) {
+        errors[`selectedFabric_${idx}`] = 'בחירת הבד אינה תקפה למוצר זה';
       }
     });
     setOrderFormErrors(errors);
@@ -362,10 +360,13 @@ const SalesDashboard = () => {
         const p = getProductById(item.catalogProductId);
         const row = {
           catalogProductId: item.catalogProductId,
+          productType: item.productType,
           quantity: Number(item.quantity),
         };
-        if (p?.needsWoodSelection && item.selectedWood) row.selectedWood = item.selectedWood;
-        if (p?.needsFabricSelection && item.selectedFabric) row.selectedFabric = item.selectedFabric;
+        const supportsUpholstery = ['מיטה', 'כסא'].includes(item.productType);
+        if (supportsUpholstery && p?.needsFabricSelection && item.selectedFabric) {
+          row.selectedFabric = item.selectedFabric;
+        }
         return row;
       }),
     };
@@ -378,7 +379,7 @@ const SalesDashboard = () => {
         deliveryAddress: '', invoiceName: '',
         orderDate: new Date().toISOString().slice(0, 10),
         estimatedDeliveryDate: '',
-        items: [{ productType: '', catalogProductId: '', quantity: 1, selectedWood: '', selectedFabric: '' }],
+        items: [{ productType: '', catalogProductId: '', quantity: 1, selectedFabric: '' }],
       });
       setDeliveryDateManuallyEdited(false);
       dispatch(fetchOrdersForSales());
@@ -460,19 +461,20 @@ const SalesDashboard = () => {
             display: 'flex', flexDirection: 'column',
           }}>
             <SectionHeader
-              emoji="💰" title="הזמנות בגבייה" btnLabel="הכל"
-              onClick={() => navigate('/sales-orders', { state: { filterPaid: false } })}
+              emoji={viewMeta[salesView].emoji}
+              title={viewMeta[salesView].title}
               titleColor={CARD_COLORS[0].title}
             />
             <Box sx={{ overflowY: 'auto', flexGrow: 1 }}>
-              {collectionPendingOrders.length === 0 ? (
-                <Alert severity="info" sx={{ borderRadius: 2, fontSize: 12 }}>אין הזמנות בגבייה כרגע.</Alert>
-              ) : collectionPendingOrders.slice(0, 8).map(order => (
+              {displayedOrders.length === 0 ? (
+                <Alert severity="info" sx={{ borderRadius: 2, fontSize: 12 }}>{viewMeta[salesView].empty}</Alert>
+              ) : displayedOrders.slice(0, 8).map(order => (
                 <Box key={order._id} sx={{
                   display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                   py: 1.2, borderBottom: `1px solid ${CARD_COLORS[0].border}`,
+                  cursor: 'pointer',
                 }}>
-                  <Box>
+                  <Box onClick={() => setSelectedOrder(order)} sx={{ flex: 1 }}>
                     <Typography sx={{ fontSize: 13, fontWeight: 600 }}>{order.customer?.name || '-'}</Typography>
                     <Typography sx={{ fontSize: 11, color: '#A1887F' }}>
                       {new Date(order.orderDate).toLocaleDateString('he-IL')}
@@ -485,9 +487,20 @@ const SalesDashboard = () => {
                     }}>
                       {STATUS_LABEL[order.status]?.label}
                     </Typography>
-                    <IconButton size="small" sx={{ color: '#2E7D32' }} onClick={() => handleMarkAsPaid(order._id)}>
-                      <PaidIcon fontSize="small" />
-                    </IconButton>
+                    {salesView === 'QUOTATION' ? (
+                      <Button
+                        size="small"
+                        variant="contained"
+                        sx={{ bgcolor: '#2E7D32', '&:hover': { bgcolor: '#1B5E20' }, fontSize: 11 }}
+                        onClick={() => handleConfirmQuotation(order._id)}
+                      >
+                        בצע הזמנה
+                      </Button>
+                    ) : (
+                      <IconButton size="small" sx={{ color: '#2E7D32' }} onClick={() => handleMarkAsPaid(order._id)}>
+                        <PaidIcon fontSize="small" />
+                      </IconButton>
+                    )}
                   </Box>
                 </Box>
               ))}
@@ -604,6 +617,7 @@ const SalesDashboard = () => {
             {newOrderData.items.map((item, idx) => {
               const filteredModels = getFilteredModelsByType(item.productType);
               const selectedProduct = getProductById(item.catalogProductId);
+              const supportsUpholstery = ['מיטה', 'כסא'].includes(item.productType);
               const unitPrice = getUnitPrice(item);
               const lineTotal = getLineTotal(item);
               return (
@@ -629,39 +643,16 @@ const SalesDashboard = () => {
                     >
                       {filteredModels.map((model) => <MenuItem key={model._id} value={model._id}>{model.name}</MenuItem>)}
                     </TextField>
-                    {woodMaterials.length > 0 && selectedProduct && (
+                    {supportsUpholstery && selectedProduct?.needsFabricSelection && (
                       <TextField
                         select
-                        label="בחירת עץ *"
-                        value={item.selectedWood}
-                        onChange={(e) => handleOrderItemChange(idx, 'selectedWood', e.target.value)}
-                        error={!!orderFormErrors[`selectedWood_${idx}`]}
-                        helperText={
-                          orderFormErrors[`selectedWood_${idx}`] ||
-                          (woodMaterials.length === 0 ? 'אין חומרי עץ מוגדרים במערכת — פנה למנהל/מחסן' : '')
-                        }
-                      >
-                        <MenuItem value="">בחר עץ</MenuItem>
-                        {woodMaterials.map((m) => (
-                          <MenuItem key={m._id} value={m._id}>
-                            {m.name}{m.code ? ` (${m.code})` : ''}
-                          </MenuItem>
-                        ))}
-                      </TextField>
-                    )}
-                    {fabricMaterials.length > 0 && selectedProduct && (
-                      <TextField
-                        select
-                        label="בחירת בד *"
+                        label="בחירת בד אחד (רשות)"
                         value={item.selectedFabric}
                         onChange={(e) => handleOrderItemChange(idx, 'selectedFabric', e.target.value)}
                         error={!!orderFormErrors[`selectedFabric_${idx}`]}
-                        helperText={
-                          orderFormErrors[`selectedFabric_${idx}`] ||
-                          (fabricMaterials.length === 0 ? 'אין בדי ריפוד מוגדרים — פנה למנהל' : '')
-                        }
+                        helperText={orderFormErrors[`selectedFabric_${idx}`] || ''}
                       >
-                        <MenuItem value="">בחר בד</MenuItem>
+                        <MenuItem value="">בחר בד אחד</MenuItem>
                         {fabricMaterials.map((m) => (
                           <MenuItem key={m._id} value={m._id}>
                             {m.name}{m.code ? ` (${m.code})` : ''}
@@ -723,6 +714,34 @@ const SalesDashboard = () => {
           >
             בצע הזמנה
           </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={!!selectedOrder} onClose={() => setSelectedOrder(null)} fullWidth maxWidth="sm">
+        <DialogTitle>פרטי הזמנה</DialogTitle>
+        <DialogContent dividers>
+          {selectedOrder && (
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+              <Typography><b>לקוח:</b> {selectedOrder.customer?.name || '-'}</Typography>
+              <Typography><b>סטטוס:</b> {STATUS_LABEL[selectedOrder.status]?.label || selectedOrder.status}</Typography>
+              <Typography><b>שולמה:</b> {selectedOrder.isPaid ? 'כן' : 'לא'}</Typography>
+            </Box>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setSelectedOrder(null)}>סגור</Button>
+          {selectedOrder && !selectedOrder.isPaid && (
+            <Button
+              variant="contained"
+              sx={{ bgcolor: '#2E7D32' }}
+              onClick={async () => {
+                await handleMarkAsPaid(selectedOrder._id);
+                setSelectedOrder(null);
+              }}
+            >
+              סמן כשולמה
+            </Button>
+          )}
         </DialogActions>
       </Dialog>
 

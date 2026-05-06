@@ -62,7 +62,8 @@ const Dashboard = () => {
   const { user } = useSelector(s => s.auth);
   const { orders, loading: ordersLoading } = useSelector(s => s.orders);
   const { employees, loading: empLoading } = useSelector(s => s.employees);
-  const { notifications, unreadCount } = useSelector(s => s.notifications);
+  const { notifications } = useSelector(s => s.notifications);
+  const unreadNotifCount = notifications.filter(n => !n.isRead && n.type !== 'CHAT').length;
   const { products } = useSelector(s => s.catalog);
   
   // 🟢 תיקון שליפת הנתונים מהצ'אט
@@ -107,7 +108,7 @@ const Dashboard = () => {
     },
     {
       title: 'התראות',
-      value: unreadCount + totalUnreadChatCount,
+      value: unreadNotifCount + totalUnreadChatCount,
       sub: totalUnreadChatCount > 0 ? `${totalUnreadChatCount} הודעות צ'אט` : 'אין הודעות חדשות',
       onClick: () => navigate('/chat')
     },

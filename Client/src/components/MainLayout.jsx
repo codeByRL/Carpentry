@@ -20,6 +20,7 @@ import AssignmentIcon from '@mui/icons-material/Assignment';
 import WarehouseIcon from '@mui/icons-material/Warehouse';
 import ChatIcon from '@mui/icons-material/Chat';
 import CategoryIcon from '@mui/icons-material/Category';
+import TextureIcon from '@mui/icons-material/Texture';
 
 import { logoutAction } from '../store/slices/authSlice';
 import { resetChatState } from '../store/slices/chatSlice';
@@ -64,6 +65,9 @@ const MainLayout = () => {
     // ✅ דשבורד נפרד למחסנאי
     { text: 'דשבורד מחסן', icon: <WarehouseIcon />, path: '/warehouse', roles: ['WAREHOUSE'] },
 
+    // ✅ דשבורד נגר ראשון בתפריט
+    { text: 'דשבורד נגר', icon: <AssignmentIcon />, path: '/carpenter/dashboard', roles: ['CARPENTER'] },
+
     // ✅ הזמנות – גישה קבועה לתצוגת ההזמנות גם לנגר
     { text: 'הזמנות חדשות', icon: <AddShoppingCartIcon />, path: '/manager/new-orders', roles: ['MANAGER'] },
     { text: 'הזמנות פעילות', icon: <ShoppingCartIcon />, path: '/manager/orders', roles: ['MANAGER'] },
@@ -78,11 +82,9 @@ const MainLayout = () => {
       },
     },
 
-    // ✅ דשבורד נגר
-    { text: 'דשבורד נגר', icon: <AssignmentIcon />, path: '/carpenter/dashboard', roles: ['CARPENTER'] },
-
     { text: 'משלוחים', icon: <LocalShippingIcon />, path: '/driver/deliveries', roles: ['DRIVER'] },
     { text: 'קטלוג מוצרים', icon: <CategoryIcon />, path: '/catalog', roles: ['MANAGER', 'SALES'] },
+    { text: 'קטלוג בדי ריפוד', icon: <TextureIcon />, path: '/sales/fabrics', roles: ['SALES'] },
     { text: 'מלאי ומחסן', icon: <InventoryIcon />, path: '/warehouses', roles: ['MANAGER', 'WAREHOUSE'] },
     { text: 'ניהול עובדים', icon: <PeopleIcon />, path: '/employees', roles: ['MANAGER'] },
     { text: "צ'אט", icon: <ChatIcon />, path: '/chat', roles: ['MANAGER', 'WAREHOUSE', 'CARPENTER', 'SALES', 'DRIVER'], isChatLink: true },

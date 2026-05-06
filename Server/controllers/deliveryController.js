@@ -41,3 +41,31 @@ export const markStopCompleted = async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 };
+
+export const getPendingDeliveries = async (req, res) => {
+  try {
+    const deliveries = await deliveryService.getPendingDeliveriesPool();
+    res.json(deliveries);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+export const claimMyDeliveries = async (req, res) => {
+  try {
+    const { desiredHours } = req.body;
+    const run = await deliveryService.claimDeliveriesForToday(req.user.id, desiredHours);
+    res.json({ message: "Deliveries claimed successfully", run });
+  } catch (error) {
+    res.status(400).json({ message: error.message });
+  }
+};
+
+export const getMyTodayDeliveries = async (req, res) => {
+  try {
+    const run = await deliveryService.getDriverTodayRun(req.user.id);
+    res.json(run || null);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};

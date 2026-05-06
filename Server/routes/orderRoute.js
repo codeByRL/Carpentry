@@ -9,7 +9,8 @@ import {
   getOrderById,
   getAllOrders,
   getOrdersByStatus,
-  markOrderAsPaid
+  markOrderAsPaid,
+  confirmQuotationOrder,
 } from "../controllers/orderController.js";
 
 const router = express.Router();
@@ -37,5 +38,8 @@ router.route('/:id/assign-best-carpenter')
 
 router.route('/:id/mark-as-paid')
   .patch(authorizeRoles('SALES', 'MANAGER'), markOrderAsPaid);
+
+router.route('/:id/confirm-order')
+  .patch(authorizeRoles('SALES', 'MANAGER'), confirmQuotationOrder);
 
 export default router;

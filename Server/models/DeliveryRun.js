@@ -8,7 +8,14 @@ const DeliveryRunSchema = new Schema({
   stops: [
     {
       order: { type: Schema.Types.ObjectId, ref: "Order" },
+      deliveryType: {
+        type: String,
+        enum: ["TO_CARPENTER", "TO_CUSTOMER"],
+        required: true
+      },
       address: String,
+      contactName: String,
+      contactPhone: String,
       lat: Number,
       lng: Number,
       wazeUrl: String,

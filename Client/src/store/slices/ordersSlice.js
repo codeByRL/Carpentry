@@ -149,6 +149,18 @@ export const markOrderAsPaid = createAsyncThunk(
   }
 );
 
+export const confirmQuotationOrder = createAsyncThunk(
+  'orders/confirmQuotationOrder',
+  async (orderId, { rejectWithValue }) => {
+    try {
+      const response = await API.patch(`/orders/${orderId}/confirm-order`);
+      return response.data.order;
+    } catch (error) {
+      return rejectWithValue(error.response?.data?.message || 'שגיאה בהמרת הצעת מחיר להזמנה');
+    }
+  }
+);
+
 // ─── Slice ───────────────────────────────────────────────────
 
 const ordersSlice = createSlice({
@@ -275,7 +287,20 @@ const ordersSlice = createSlice({
           state.selectedOrder = action.payload;
         }
       })
-      .addCase(markOrderAsPaid.rejected, handleSubmitRejected);
+      .addCase(markOrderAsPaid.rejected, handleSubmitRejected)
+
+      .addCase(confirmQuotationOrder.pending, handleSubmitPending)
+      .addCase(confirmQuotationOrder.fulfilled, (state, action) => {
+        handleSubmitFulfilled(state);
+        const index = state.orders.findIndex(order => order._id === action.payload._id);
+        if (index !== -1) {
+          state.orders[index] = action.payload;
+        }
+        if (state.selectedOrder?._id === action.payload._id) {
+          state.selectedOrder = action.payload;
+        }
+      })
+      .addCase(confirmQuotationOrder.rejected, handleSubmitRejected);
   },
 });
 

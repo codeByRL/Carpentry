@@ -242,6 +242,28 @@ const getOrdersByStatus = async (req, res) => {
    }
  };
 
+// Convert quotation to active order
+const confirmQuotationOrder = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const order = await Order.findById(id);
+
+    if (!order) {
+      return res.status(404).json({ message: "Order not found" });
+    }
+    if (order.status !== "QUOTATION_PENDING") {
+      return res.status(400).json({ message: "Only quotation orders can be confirmed" });
+    }
+
+    order.status = "ORDERED";
+    await order.save();
+    res.json({ message: "Quotation converted to order successfully", order });
+  } catch (error) {
+    console.error("Error confirming quotation:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
 
 export {
   createOrderController,
@@ -250,5 +272,6 @@ export {
   getOrderById,
   getAllOrders,
   getOrdersByStatus,
-  markOrderAsPaid // Add this to the exports
+  markOrderAsPaid, // Add this to the exports
+  confirmQuotationOrder,
 };

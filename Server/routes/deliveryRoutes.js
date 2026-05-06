@@ -4,7 +4,10 @@ import { authorizeRoles } from "../middlewares/authorizeRoles.js";
 import {
   createDeliveryRuns,
   getMyRoute,
-  markStopCompleted
+  markStopCompleted,
+  getPendingDeliveries,
+  claimMyDeliveries,
+  getMyTodayDeliveries,
 } from "../controllers/deliveryController.js";
 
 const router = express.Router();
@@ -14,5 +17,8 @@ router.use(authenticate);
 router.post("/dispatch", authorizeRoles("MANAGER"), createDeliveryRuns);
 router.get("/my-route", authorizeRoles("DRIVER"), getMyRoute);
 router.post("/complete-stop", authorizeRoles("DRIVER"), markStopCompleted);
+router.get("/pending", authorizeRoles("DRIVER", "MANAGER"), getPendingDeliveries);
+router.post("/claim-my-today", authorizeRoles("DRIVER"), claimMyDeliveries);
+router.get("/my-today", authorizeRoles("DRIVER"), getMyTodayDeliveries);
 
 export default router;

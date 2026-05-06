@@ -10,11 +10,13 @@ import Employees from './pages/Employees';
 import CatalogPage from './pages/CatalogPage';
 import ChatPage from './pages/chatPage'; // ⬅️ תוקן: ייבוא באות קטנה
 import SalesDashboard from './pages/SalesDashboard';
+import SalesFabricsCatalog from './pages/SalesFabricsCatalog';
 import WarehouseDashboard from './pages/WarehouseDashboard';
 import CarpenterDashboard from './pages/CarpenterDashboard';
 import ManagerNewOrders from './pages/ManagerNewOrders';
 import ManagerOrders from './pages/ManagerOrders';
 import Warehouses from './pages/warehouses';
+import DriverDeliveries from './pages/DriverDeliveries';
 
 import { loginAction } from './store/slices/authSlice';
 
@@ -34,7 +36,7 @@ function App() {
       case 'CARPENTER':
         return '/carpenter/dashboard';
       case 'DRIVER':
-        return '/chat';
+        return '/driver/deliveries';
       default:
         return '/chat';
     }
@@ -97,11 +99,13 @@ function App() {
             {/* === ראוטים לאיש מכירות === */}
             {user.role === 'SALES' && <Route path="/sales-dashboard" element={<SalesDashboard />} />}
             {user.role === 'SALES' && <Route path="/catalog" element={<CatalogPage />} />}
+            {user.role === 'SALES' && <Route path="/sales/fabrics" element={<SalesFabricsCatalog />} />}
 
             {/* === ראוטים למחסנאי === */}
             {user.role === 'WAREHOUSE' && <Route path="/warehouse" element={<WarehouseDashboard />} />}
             {user.role === 'WAREHOUSE' && <Route path="/warehouses" element={<Warehouses />} />}
             {user.role === 'CARPENTER' && <Route path="/carpenter/dashboard" element={<CarpenterDashboard />} />}
+            {user.role === 'DRIVER' && <Route path="/driver/deliveries" element={<DriverDeliveries />} />}
 
             {/* 🆕 === ראוט צ'אט משופר: תמיכה ב-partnerId === */}
             {(user.role === 'MANAGER' || user.role === 'SALES' || user.role === 'WAREHOUSE' || user.role === 'CARPENTER' || user.role === 'DRIVER') && (

@@ -3,6 +3,7 @@ import { useDispatch, useSelector } from "react-redux";
 import { useNavigate } from "react-router-dom";
 import {
   Alert,
+  Autocomplete,
   Box,
   Button,
   Card,
@@ -111,14 +112,10 @@ const CarpenterDashboard = () => {
   const [newMaterialDescription, setNewMaterialDescription] = useState("");
   const { notifications } = useSelector((s) => s.notifications);
   const chatState = useSelector((s) => s.chat);
-  const [ordersTab, setOrdersTab] = useState("WAITING"); // WAITING | ACTIVE | PAUSED | DONE
+  const [ordersTab, setOrdersTab] = useState(null); // WAITING | ACTIVE | PAUSED | DONE
   const [characterizeForm, setCharacterizeForm] = useState({
     estimatedWorkWeeks: "",
-    needsWoodSelection: false,
-    needsFabricSelection: false,
     baseProducts: [{ product: "", quantity: 1 }],
-    woodOptions: [{ materialId: "", code: "", description: "" }],
-    fabricOptions: [{ materialId: "", code: "", description: "" }],
   });
 
   const loadData = async () => {
@@ -128,7 +125,7 @@ const CarpenterDashboard = () => {
       const [ordersRes, catalogRes, materialsRes] = await Promise.all([
         API.get("/carpenter/my-orders"),
         API.get("/carpenter/products-for-characterization"),
-        API.get("/base-products?limit=200"),
+        API.get("/base-products?limit=5000"),
       ]);
       setOrders(ordersRes.data || []);
       setCatalogProducts(catalogRes.data || []);
@@ -164,14 +161,6 @@ const CarpenterDashboard = () => {
   const pausedWork = useMemo(
     () => orders.filter((o) => o.carpenterPaused),
     [orders]
-  );
-  const woodMaterials = useMemo(
-    () => materials.filter((m) => m.isMaterial && m.materialType === "wood"),
-    [materials]
-  );
-  const fabricMaterials = useMemo(
-    () => materials.filter((m) => m.isMaterial && m.materialType === "fabric"),
-    [materials]
   );
   const doneWaitingDriver = useMemo(
     () => orders.filter((o) => o.status === "READY_FOR_SHIPPING" && !!o.carpenterCompletedAt),
@@ -215,26 +204,57 @@ const CarpenterDashboard = () => {
   const handleResumeOrder = (orderId) =>
     runAction(() => API.patch(`/carpenter/orders/${orderId}/resume`));
 
+  const printCustomerDeliveryLabel = (order) => {
+    const customerName = order?.customerName || "—";
+    const customerAddress = order?.deliveryAddress || "—";
+    const orderCode = order?.orderId ? `#${String(order.orderId).slice(-6)}` : "—";
+    const printDate = new Date().toLocaleString("he-IL");
+    const html = `
+      <html dir="rtl" lang="he">
+        <head>
+          <title>תווית משלוח ${orderCode}</title>
+          <style>
+            body { font-family: Arial, sans-serif; margin: 0; padding: 16px; color: #222; }
+            .label { border: 2px dashed #444; border-radius: 8px; padding: 16px; max-width: 520px; }
+            .title { font-size: 20px; font-weight: 700; margin-bottom: 8px; }
+            .meta { font-size: 12px; color: #666; margin-bottom: 12px; }
+            .line { margin: 4px 0; font-size: 14px; }
+          </style>
+        </head>
+        <body>
+          <div class="label">
+            <div class="title">תווית הובלה ללקוח ${orderCode}</div>
+            <div class="meta">הודפס בתאריך: ${printDate}</div>
+            <div class="line"><b>לקוח:</b> ${customerName}</div>
+            <div class="line"><b>כתובת:</b> ${customerAddress}</div>
+          </div>
+        </body>
+      </html>
+    `;
+    const win = window.open("", "_blank", "width=720,height=900");
+    if (!win) return;
+    win.document.open();
+    win.document.write(html);
+    win.document.close();
+    win.focus();
+    setTimeout(() => {
+      win.print();
+      win.close();
+    }, 250);
+  };
+
   const openCharacterizeDialog = (product) => {
     setCharacterizeProduct(product);
     setCharacterizeForm({
       estimatedWorkWeeks: product.estimatedWorkTime
         ? Number(product.estimatedWorkTime) / HOURS_PER_WORK_WEEK
         : "",
-      needsWoodSelection: Boolean(product.needsWoodSelection),
-      needsFabricSelection: Boolean(product.needsFabricSelection),
       baseProducts: product.baseProducts?.length
         ? product.baseProducts.map((b) => ({
             product: b.product?._id || b.product || "",
             quantity: b.quantity || 1,
           }))
         : [{ product: "", quantity: 1 }],
-      woodOptions: product.woodOptions?.length
-        ? product.woodOptions.map((w) => ({ materialId: "", code: w.code || "", description: w.description || "" }))
-        : [{ materialId: "", code: "", description: "" }],
-      fabricOptions: product.fabricOptions?.length
-        ? product.fabricOptions.map((f) => ({ materialId: "", code: f.code || "", description: f.description || "" }))
-        : [{ materialId: "", code: "", description: "" }],
     });
   };
 
@@ -260,42 +280,6 @@ const CarpenterDashboard = () => {
     }));
   };
 
-  const updateOption = (group, index, key, value) => {
-    setCharacterizeForm((prev) => {
-      const next = [...prev[group]];
-      next[index] = { ...next[index], [key]: value };
-      return { ...prev, [group]: next };
-    });
-  };
-
-  const updateOptionFromMaterial = (group, index, materialId) => {
-    const source = group === "woodOptions" ? woodMaterials : fabricMaterials;
-    const selected = source.find((m) => m._id === materialId);
-    setCharacterizeForm((prev) => {
-      const next = [...prev[group]];
-      next[index] = {
-        materialId: materialId || "",
-        code: selected?.code || "",
-        description: selected?.description || selected?.name || "",
-      };
-      return { ...prev, [group]: next };
-    });
-  };
-
-  const addOption = (group) => {
-    setCharacterizeForm((prev) => ({
-      ...prev,
-      [group]: [...prev[group], { materialId: "", code: "", description: "" }],
-    }));
-  };
-
-  const removeOption = (group, index) => {
-    setCharacterizeForm((prev) => ({
-      ...prev,
-      [group]: prev[group].filter((_, i) => i !== index),
-    }));
-  };
-
   const handleSubmitCharacterization = async () => {
     if (!characterizeProduct) return;
     const cleanedBaseProducts = characterizeForm.baseProducts
@@ -307,22 +291,10 @@ const CarpenterDashboard = () => {
       return;
     }
 
-    const cleanedWoodOptions = characterizeForm.woodOptions
-      .filter((o) => o.code?.trim() && o.description?.trim())
-      .map((o) => ({ code: o.code.trim(), description: o.description.trim() }));
-
-    const cleanedFabricOptions = characterizeForm.fabricOptions
-      .filter((o) => o.code?.trim() && o.description?.trim())
-      .map((o) => ({ code: o.code.trim(), description: o.description.trim() }));
-
     await runAction(() =>
       API.post(`/carpenter/characterize/${characterizeProduct._id}`, {
         baseProducts: cleanedBaseProducts,
         estimatedWorkTime: Number(characterizeForm.estimatedWorkWeeks) * HOURS_PER_WORK_WEEK,
-        needsWoodSelection: characterizeForm.needsWoodSelection,
-        needsFabricSelection: characterizeForm.needsFabricSelection,
-        woodOptions: cleanedWoodOptions,
-        fabricOptions: cleanedFabricOptions,
       })
     );
 
@@ -407,70 +379,111 @@ const CarpenterDashboard = () => {
         ))}
       </Grid>
 
-      <Card sx={{ ...cardSx, mb: 2.2 }}>
-        <CardContent>
-          <Typography sx={sectionTitleSx}>התראות וצ'אט</Typography>
-          {totalUnreadChatCount > 0 && (
-            <Box
-              onClick={() => navigate("/chat")}
-              sx={{
-                mb: 2,
-                p: 2,
-                borderRadius: 2,
-                bgcolor: "#D2691E",
-                color: "white",
-                display: "flex",
-                alignItems: "center",
-                gap: 2,
-                cursor: "pointer",
-                boxShadow: "0 4px 12px rgba(210, 105, 30, 0.3)",
-              }}
-            >
-              <ChatIcon />
-              <Box>
-                <Typography sx={{ fontWeight: 700, fontSize: 14 }}>הודעות צ'אט חדשות!</Typography>
-                <Typography sx={{ fontSize: 12, opacity: 0.9 }}>
-                  יש לך {totalUnreadChatCount} הודעות שמחכות לך
-                </Typography>
-              </Box>
-            </Box>
-          )}
-          {unreadNotif === 0 && totalUnreadChatCount === 0 ? (
-            <Alert severity="info">אין התראות חדשות</Alert>
-          ) : (
-            (notifications || [])
-              .filter((n) => !n.isRead && n.type !== "CHAT")
-              .map((n) => (
+      <Grid container spacing={2.2} sx={{ mb: 2.2 }}>
+        <Grid size={{ xs: 12, md: 6 }}>
+          <Card sx={{ ...cardSx, height: 250 }}>
+            <CardContent sx={{ height: "100%", display: "flex", flexDirection: "column" }}>
+              <Typography sx={sectionTitleSx}>התראות וצ'אט</Typography>
+              {totalUnreadChatCount > 0 && (
                 <Box
-                  key={n._id || n.id}
+                  onClick={() => navigate("/chat")}
                   sx={{
+                    mb: 2,
+                    p: 2,
+                    borderRadius: 2,
+                    bgcolor: "#D2691E",
+                    color: "white",
                     display: "flex",
-                    justifyContent: "space-between",
                     alignItems: "center",
-                    py: 1.2,
-                    borderBottom: "1px solid #EFE0D4",
+                    gap: 2,
+                    cursor: "pointer",
+                    boxShadow: "0 4px 12px rgba(210, 105, 30, 0.3)",
                   }}
                 >
-                  <Box sx={{ flex: 1 }}>
-                    <Typography sx={{ fontSize: 12.5 }}>{n.message || n.text}</Typography>
-                    <Typography sx={{ fontSize: 10, color: "#A1887F" }}>
-                      {new Date(n.createdAt).toLocaleString("he-IL")}
+                  <ChatIcon />
+                  <Box>
+                    <Typography sx={{ fontWeight: 700, fontSize: 14 }}>הודעות צ'אט חדשות!</Typography>
+                    <Typography sx={{ fontSize: 12, opacity: 0.9 }}>
+                      יש לך {totalUnreadChatCount} הודעות שמחכות לך
                     </Typography>
                   </Box>
-                  <IconButton
-                    size="small"
-                    sx={{ color: "#D2691E" }}
-                    onClick={() => dispatch(markNotificationRead(n._id || n.id))}
-                  >
-                    ✓
-                  </IconButton>
                 </Box>
-              ))
-          )}
-        </CardContent>
-      </Card>
+              )}
+              <Box sx={{ flex: 1, overflowY: "auto" }}>
+              {unreadNotif === 0 && totalUnreadChatCount === 0 ? (
+                <Alert severity="info">אין התראות חדשות</Alert>
+              ) : (
+                (notifications || [])
+                  .filter((n) => !n.isRead && n.type !== "CHAT")
+                  .map((n) => (
+                    <Box
+                      key={n._id || n.id}
+                      sx={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        py: 1.2,
+                        borderBottom: "1px solid #EFE0D4",
+                      }}
+                    >
+                      <Box sx={{ flex: 1 }}>
+                        <Typography sx={{ fontSize: 12.5 }}>{n.message || n.text}</Typography>
+                        <Typography sx={{ fontSize: 10, color: "#A1887F" }}>
+                          {new Date(n.createdAt).toLocaleString("he-IL")}
+                        </Typography>
+                      </Box>
+                      <IconButton
+                        size="small"
+                        sx={{ color: "#D2691E" }}
+                        onClick={() => dispatch(markNotificationRead(n._id || n.id))}
+                      >
+                        ✓
+                      </IconButton>
+                    </Box>
+                  ))
+              )}
+              </Box>
+            </CardContent>
+          </Card>
+        </Grid>
+        <Grid size={{ xs: 12, md: 6 }}>
+          <Card sx={{ ...cardSx, height: 250 }}>
+            <CardContent sx={{ height: "100%", display: "flex", flexDirection: "column" }}>
+              <Typography sx={sectionTitleSx}>
+                מוצרי קטלוג הממתינים לאפיון ({catalogProducts.length})
+              </Typography>
+              <Box sx={{ flex: 1, overflowY: "auto" }}>
+              {catalogProducts.length === 0 ? (
+                <Alert severity="info">אין כרגע מוצרים שממתינים לאפיון (0)</Alert>
+              ) : (
+                catalogProducts.map((p) => (
+                  <Box key={p._id} sx={{ p: 1.2, mb: 1.2, border: "1px solid #EFE0D4", borderRadius: 2 }}>
+                    <Typography sx={{ fontWeight: 600, fontSize: 14 }}>{p.name}</Typography>
+                    <Typography sx={{ fontSize: 12, color: "#7B6A5F", mb: 1 }}>{p.description || "ללא תיאור"}</Typography>
+                    <Button
+                      size="small"
+                      variant="contained"
+                      disabled={submitLoading}
+                      onClick={() => openCharacterizeDialog(p)}
+                      sx={{ bgcolor: "#6D4C41", "&:hover": { bgcolor: "#4E342E" } }}
+                    >
+                      אפיין מוצר
+                    </Button>
+                  </Box>
+                ))
+              )}
+              </Box>
+            </CardContent>
+          </Card>
+        </Grid>
+      </Grid>
 
       <Grid container spacing={2.2} sx={{ justifyContent: "center" }}>
+        {!ordersTab && (
+          <Grid size={{ xs: 12 }}>
+            <Alert severity="info">בחרי ריבוע סטטוס למעלה כדי לצפות ברשימת ההזמנות.</Alert>
+          </Grid>
+        )}
         {ordersTab === "WAITING" && (
         <Grid size={{ xs: 12, md: 6 }}>
           <Card sx={cardSx}>
@@ -519,6 +532,13 @@ const CarpenterDashboard = () => {
                     <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap" }}>
                       <Button
                         size="small"
+                        variant="outlined"
+                        onClick={() => printCustomerDeliveryLabel(o)}
+                      >
+                        הדפס כתובת לקוח
+                      </Button>
+                      <Button
+                        size="small"
                         variant="contained"
                         disabled={submitLoading}
                         sx={{ bgcolor: "#2E7D32", "&:hover": { bgcolor: "#1B5E20" } }}
@@ -558,35 +578,13 @@ const CarpenterDashboard = () => {
                     <Typography sx={{ fontSize: 12, color: "#7B6A5F" }}>
                       הזמנה #{o.orderId}
                     </Typography>
-                  </Box>
-                ))
-              )}
-            </CardContent>
-          </Card>
-        </Grid>
-        )}
-
-        <Grid size={{ xs: 12, md: 6 }}>
-          <Card sx={cardSx}>
-            <CardContent>
-              <Typography sx={sectionTitleSx}>
-                מוצרי קטלוג הממתינים לאפיון ({catalogProducts.length})
-              </Typography>
-              {catalogProducts.length === 0 ? (
-                <Alert severity="info">אין כרגע מוצרים שממתינים לאפיון (0)</Alert>
-              ) : (
-                catalogProducts.map((p) => (
-                  <Box key={p._id} sx={{ p: 1.2, mb: 1.2, border: "1px solid #EFE0D4", borderRadius: 2 }}>
-                    <Typography sx={{ fontWeight: 600, fontSize: 14 }}>{p.name}</Typography>
-                    <Typography sx={{ fontSize: 12, color: "#7B6A5F", mb: 1 }}>{p.description || "ללא תיאור"}</Typography>
                     <Button
                       size="small"
-                      variant="contained"
-                      disabled={submitLoading}
-                      onClick={() => openCharacterizeDialog(p)}
-                      sx={{ bgcolor: "#6D4C41", "&:hover": { bgcolor: "#4E342E" } }}
+                      variant="outlined"
+                      sx={{ mt: 1 }}
+                      onClick={() => printCustomerDeliveryLabel(o)}
                     >
-                      אפיין מוצר
+                      הדפס כתובת לקוח
                     </Button>
                   </Box>
                 ))
@@ -594,6 +592,7 @@ const CarpenterDashboard = () => {
             </CardContent>
           </Card>
         </Grid>
+        )}
 
         {ordersTab === "PAUSED" && (
         <Grid size={{ xs: 12 }}>
@@ -660,11 +659,19 @@ const CarpenterDashboard = () => {
         <DialogContent dividers>
           <Box sx={{ display: "flex", flexDirection: "column", gap: 2, mt: 1 }}>
             {characterizeProduct?.image && (
-              <Box sx={{ borderRadius: 2, overflow: "hidden", height: 220, border: "1px solid #E5D5C8" }}>
+              <Box
+                sx={{
+                  borderRadius: 2,
+                  overflow: "hidden",
+                  height: { xs: 260, md: 420 },
+                  border: "1px solid #E5D5C8",
+                  bgcolor: "#fff",
+                }}
+              >
                 <img
                   src={`${BASE_URL}${characterizeProduct.image}`}
                   alt={characterizeProduct.name}
-                  style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                  style={{ width: "100%", height: "100%", objectFit: "contain" }}
                 />
               </Box>
             )}
@@ -683,29 +690,6 @@ const CarpenterDashboard = () => {
               onChange={(e) => setCharacterizeForm((prev) => ({ ...prev, estimatedWorkWeeks: e.target.value }))}
             />
 
-            <FormControlLabel
-              control={
-                <Switch
-                  checked={characterizeForm.needsWoodSelection}
-                  onChange={(e) =>
-                    setCharacterizeForm((prev) => ({ ...prev, needsWoodSelection: e.target.checked }))
-                  }
-                />
-              }
-              label="נדרש לבחור סוג עץ ללקוח"
-            />
-            <FormControlLabel
-              control={
-                <Switch
-                  checked={characterizeForm.needsFabricSelection}
-                  onChange={(e) =>
-                    setCharacterizeForm((prev) => ({ ...prev, needsFabricSelection: e.target.checked }))
-                  }
-                />
-              }
-              label="נדרש לבחור סוג בד ללקוח"
-            />
-
             <Box>
               <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mb: 1 }}>
                 <Typography sx={{ fontWeight: 700 }}>חומרי גלם נדרשים</Typography>
@@ -715,19 +699,30 @@ const CarpenterDashboard = () => {
               </Box>
               {characterizeForm.baseProducts.map((item, index) => (
                 <Box key={`bp-${index}`} sx={{ display: "flex", gap: 1, mb: 1 }}>
-                  <TextField
-                    select
+                  <Autocomplete
                     fullWidth
-                    label="חומר גלם"
-                    value={item.product}
-                    onChange={(e) => updateBaseProduct(index, "product", e.target.value)}
-                  >
-                    {materials.map((m) => (
-                      <MenuItem key={m._id} value={m._id}>
-                        {m.code ? `${m.code} - ${m.name}` : m.name} {m.unit ? `(${m.unit})` : ""}
-                      </MenuItem>
-                    ))}
-                  </TextField>
+                    options={materials}
+                    value={materials.find((m) => String(m._id) === String(item.product)) || null}
+                    onChange={(_, selected) => updateBaseProduct(index, "product", selected?._id || "")}
+                    isOptionEqualToValue={(option, value) => String(option._id) === String(value._id)}
+                    getOptionLabel={(option) =>
+                      option?.code
+                        ? `${option.code} - ${option.name}${option.unit ? ` (${option.unit})` : ""}`
+                        : `${option?.name || ""}${option?.unit ? ` (${option.unit})` : ""}`
+                    }
+                    filterOptions={(options, state) => {
+                      const q = (state.inputValue || "").trim().toLowerCase();
+                      if (!q) return options.slice(0, 100);
+                      return options.filter((m) =>
+                        [m.name, m.code, m.description]
+                          .filter(Boolean)
+                          .some((v) => String(v).toLowerCase().includes(q))
+                      );
+                    }}
+                    renderInput={(params) => (
+                      <TextField {...params} label="חומר גלם (חיפוש מהיר)" />
+                    )}
+                  />
                   <TextField
                     label="כמות"
                     type="number"
@@ -749,91 +744,7 @@ const CarpenterDashboard = () => {
               </Button>
             </Box>
 
-            <Box>
-              <Typography sx={{ fontWeight: 700, mb: 1 }}>אפשרויות עץ</Typography>
-              {characterizeForm.woodOptions.map((item, index) => (
-                <Box key={`wo-${index}`} sx={{ display: "flex", gap: 1, mb: 1 }}>
-                  <TextField
-                    select
-                    fullWidth
-                    label="בחר עץ קיים"
-                    value={item.materialId || ""}
-                    onChange={(e) => updateOptionFromMaterial("woodOptions", index, e.target.value)}
-                  >
-                    {woodMaterials.map((m) => (
-                      <MenuItem key={m._id} value={m._id}>
-                        {m.code ? `${m.code} - ${m.name}` : m.name}
-                      </MenuItem>
-                    ))}
-                  </TextField>
-                  <TextField
-                    label="קוד"
-                    value={item.code}
-                    onChange={(e) => updateOption("woodOptions", index, "code", e.target.value)}
-                    sx={{ width: 150 }}
-                  />
-                  <TextField
-                    fullWidth
-                    label="תיאור"
-                    value={item.description}
-                    onChange={(e) => updateOption("woodOptions", index, "description", e.target.value)}
-                  />
-                  <IconButton
-                    color="error"
-                    onClick={() => removeOption("woodOptions", index)}
-                    disabled={characterizeForm.woodOptions.length === 1}
-                  >
-                    <DeleteIcon />
-                  </IconButton>
-                </Box>
-              ))}
-              <Button startIcon={<AddIcon />} onClick={() => addOption("woodOptions")} size="small">
-                הוסף אפשרות עץ
-              </Button>
-            </Box>
 
-            <Box>
-              <Typography sx={{ fontWeight: 700, mb: 1 }}>אפשרויות בד</Typography>
-              {characterizeForm.fabricOptions.map((item, index) => (
-                <Box key={`fo-${index}`} sx={{ display: "flex", gap: 1, mb: 1 }}>
-                  <TextField
-                    select
-                    fullWidth
-                    label="בחר בד קיים"
-                    value={item.materialId || ""}
-                    onChange={(e) => updateOptionFromMaterial("fabricOptions", index, e.target.value)}
-                  >
-                    {fabricMaterials.map((m) => (
-                      <MenuItem key={m._id} value={m._id}>
-                        {m.code ? `${m.code} - ${m.name}` : m.name}
-                      </MenuItem>
-                    ))}
-                  </TextField>
-                  <TextField
-                    label="קוד"
-                    value={item.code}
-                    onChange={(e) => updateOption("fabricOptions", index, "code", e.target.value)}
-                    sx={{ width: 150 }}
-                  />
-                  <TextField
-                    fullWidth
-                    label="תיאור"
-                    value={item.description}
-                    onChange={(e) => updateOption("fabricOptions", index, "description", e.target.value)}
-                  />
-                  <IconButton
-                    color="error"
-                    onClick={() => removeOption("fabricOptions", index)}
-                    disabled={characterizeForm.fabricOptions.length === 1}
-                  >
-                    <DeleteIcon />
-                  </IconButton>
-                </Box>
-              ))}
-              <Button startIcon={<AddIcon />} onClick={() => addOption("fabricOptions")} size="small">
-                הוסף אפשרות בד
-              </Button>
-            </Box>
           </Box>
         </DialogContent>
         <DialogActions>

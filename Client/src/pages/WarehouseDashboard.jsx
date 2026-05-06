@@ -492,9 +492,7 @@ const EditBaseProductDialog = ({ open, product, onClose, onSaved }) => {
           <Grid size={{ xs: 8 }}>
             <TextField fullWidth size="small" label="שם המוצר *" value={form.name} onChange={handleChange('name')} />
           </Grid>
-          <Grid size={{ xs: 4 }}>
-            <TextField fullWidth size="small" label="קוד (אוטומטי)" value={form.code} InputProps={{ readOnly: true }} />
-          </Grid>
+          <Grid size={{ xs: 4 }} />
           <Grid size={{ xs: 4 }}>
             <TextField fullWidth size="small" label="יחידת מידה *" value={form.unit} onChange={handleChange('unit')} />
           </Grid>
@@ -891,10 +889,10 @@ const WarehouseDashboard = () => {
                     <Typography sx={{ fontSize: 11, color: '#A1887F' }}>סה"כ פריטים</Typography>
                     <Typography sx={{ fontSize: 20, fontWeight: 700, color: C.primary }}>{(purchaseList || []).length}</Typography>
                   </Box>
-                  <Box sx={{ p: 1.5, borderRadius: 2, bgcolor: '#DCFCE7', border: '1px solid #86EFAC', minWidth: 120 }}>
-                    <Typography sx={{ fontSize: 11, color: '#A1887F' }}>הגיעו</Typography>
-                    <Typography sx={{ fontSize: 20, fontWeight: 700, color: '#16A34A' }}>
-                      {supplierNames.filter(name => purchaseBySupplier[name].every(i => i.status === 'ARRIVED')).length}
+                  <Box sx={{ p: 1.5, borderRadius: 2, bgcolor: '#E0F2FE', border: '1px solid #7DD3FC', minWidth: 120 }}>
+                    <Typography sx={{ fontSize: 11, color: '#A1887F' }}>נשלח לטיפול הספק</Typography>
+                    <Typography sx={{ fontSize: 20, fontWeight: 700, color: '#0284C7' }}>
+                      {supplierNames.filter(name => purchaseBySupplier[name].every(i => i.status === 'SENT_TO_SUPPLIER' || i.status === 'ARRIVED')).length}
                     </Typography>
                   </Box>
                 </Box>
