@@ -1,6 +1,7 @@
 // src/pages/ManagerOrders.jsx
 import React, { useEffect, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
+import { useLocation } from 'react-router-dom';
 import {
   Box, Typography, Paper, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, Chip, Button, Dialog, DialogTitle, DialogContent,
@@ -14,6 +15,7 @@ import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import { fetchAllOrders } from '../store/slices/ordersSlice';
 
 const STATUS_LABELS = {
+  QUOTATION_PENDING: { label: 'בהצעת מחיר', color: 'warning' },
   ORDERED: { label: 'הזמנה חדשה', color: 'default' },
   WAITING_FOR_WAREHOUSE: { label: 'ממתין למחסן', color: 'info' },
   WAITING_FOR_PICKING: { label: 'ממתין לליקוט', color: 'primary' },
@@ -25,16 +27,25 @@ const STATUS_LABELS = {
 
 const ManagerOrders = () => {
   const dispatch = useDispatch();
+  const location = useLocation();
   const { orders, loading, error } = useSelector(state => state.orders);
 
   const [statusFilter, setStatusFilter] = useState('ALL');
   const [search, setSearch] = useState('');
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [viewOpen, setViewOpen] = useState(false);
+  const [emptyText, setEmptyText] = useState('אין הזמנות להצגה');
 
   useEffect(() => {
     dispatch(fetchAllOrders());
   }, [dispatch]);
+
+  useEffect(() => {
+    const initial = location.state?.initialStatusFilter;
+    const msg = location.state?.emptyText;
+    if (initial) setStatusFilter(initial);
+    if (msg) setEmptyText(msg);
+  }, [location.state]);
 
   const now = new Date();
 
@@ -114,7 +125,7 @@ const ManagerOrders = () => {
 
       {/* ─── טבלה ────────────────────────── */}
       {filtered.length === 0 ? (
-        <Alert severity="info">אין הזמנות להצגה</Alert>
+        <Alert severity="info">{emptyText}</Alert>
       ) : (
         <TableContainer component={Paper} sx={{ borderRadius: 3, boxShadow: 2 }}>
           <Table>

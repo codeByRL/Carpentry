@@ -18,7 +18,9 @@ import { fetchCatalogByStatus } from '../store/slices/catalogSlice';
 import { fetchActiveChatPartners } from '../store/slices/chatSlice';
 
 const STATUS_LABEL = {
+  QUOTATION_PENDING:   { label: 'בהצעת מחיר',   color: '#FFD700' },
   ORDERED:             { label: 'הזמנה חדשה',   color: '#D2691E' },
+  WAITING_FOR_WAREHOUSE:{ label: 'ממתין למחסן', color: '#A0522D' },
   WAITING_FOR_PICKING: { label: 'ממתין לליקוט', color: '#A0522D' },
   WAITING_FOR_SUPPLY:  { label: 'ממתין לאספקה', color: '#8B0000' },
   READY_FOR_SHIPPING:  { label: 'מוכן למשלוח',  color: '#5D4037' },
@@ -67,12 +69,9 @@ const Dashboard = () => {
   const chatState = useSelector(s => s.chat);
   
   // ניסיון לחשב מכל מקור אפשרי ב-State
-  const totalUnreadChatCount = (
-    // דרך 1: מהאובייקט unreadMessagesCount
-    (chatState?.unreadMessagesCount ? Object.values(chatState.unreadMessagesCount).reduce((a, b) => a + (b || 0), 0) : 0) ||
-    // דרך 2: סכימה של unreadCount ישירות מהשותפים (אם קיים שם)
-    (chatState?.activeChatPartners?.reduce((acc, p) => acc + (p.unreadCount || 0), 0) || 0)
-  );
+  // ספירה ממקור אחד בלבד (השרת) — בלי כפילות מ־unreadMessagesCount ב־Redux
+  const totalUnreadChatCount =
+    chatState?.activeChatPartners?.reduce((acc, p) => acc + (Number(p.unreadCount) || 0), 0) || 0;
 
   useEffect(() => {
     dispatch(fetchAllOrders());
@@ -123,7 +122,7 @@ const Dashboard = () => {
   }
 
   return (
-    <Box sx={{ width: '100%', boxSizing: 'border-box' }}>
+    <Box sx={{ width: '100%', maxWidth: '100%', mx: 'auto', boxSizing: 'border-box' }}>
       <Box sx={{ mb: 3 }}>
         <Typography sx={{ fontSize: 21, fontWeight: 700, color: '#3E2723' }}>
           שלום, {user?.fullName || user?.username || 'מנהל'} 👋
@@ -133,7 +132,7 @@ const Dashboard = () => {
       {/* שורה 1: כרטיסי סטטיסטיקה */}
       <Grid container spacing={2} sx={{ mb: 2.5 }}>
         {stats.map((stat, i) => (
-          <Grid item xs={6} md={3} key={i}>
+          <Grid size={{ xs: 6, md: 3 }} key={i}>
             <Box onClick={stat.onClick} sx={{
               bgcolor: STAT_COLORS[i], borderRadius: 3, p: 2.5, height: 140, cursor: 'pointer',
               display: 'flex', flexDirection: 'column', justifyContent: 'space-between',
@@ -154,7 +153,7 @@ const Dashboard = () => {
 
       <Grid container spacing={2} sx={{ mb: 2.5 }}>
         {/* עמודה 1: הזמנות */}
-        <Grid item xs={12} md={4}>
+        <Grid size={{ xs: 12, md: 4 }}>
           <Paper sx={{ borderRadius: 3, p: 2.5, border: `1px solid ${CARD_COLORS[0].border}`, bgcolor: CARD_COLORS[0].bg, height: 380, display: 'flex', flexDirection: 'column' }}>
             <SectionHeader emoji="📦" title="הזמנות אחרונות" btnLabel="הכל" onClick={() => navigate('/manager/orders')} titleColor={CARD_COLORS[0].title} />
             <Box sx={{ overflowY: 'auto', flexGrow: 1 }}>
@@ -174,7 +173,7 @@ const Dashboard = () => {
         </Grid>
 
         {/* עמודה 2: התראות + מלבן צ'אט בולט */}
-        <Grid item xs={12} md={4}>
+        <Grid size={{ xs: 12, md: 4 }}>
           <Paper sx={{ borderRadius: 3, p: 2.5, border: `1px solid ${CARD_COLORS[1].border}`, bgcolor: CARD_COLORS[1].bg, height: 380, display: 'flex', flexDirection: 'column' }}>
             <SectionHeader emoji="🔔" title="התראות" titleColor={CARD_COLORS[1].title} />
             
@@ -219,7 +218,7 @@ const Dashboard = () => {
         </Grid>
 
         {/* עמודה 3: עומס נגרים */}
-        <Grid item xs={12} md={4}>
+        <Grid size={{ xs: 12, md: 4 }}>
           <Paper sx={{ borderRadius: 3, p: 2.5, border: `1px solid ${CARD_COLORS[2].border}`, bgcolor: CARD_COLORS[2].bg, height: 380, display: 'flex', flexDirection: 'column' }}>
             <SectionHeader emoji="🪚" title="עומס נגרים" btnLabel="הכל" onClick={() => navigate('/employees')} titleColor={CARD_COLORS[2].title} />
             <Box sx={{ overflowY: 'auto', flexGrow: 1 }}>

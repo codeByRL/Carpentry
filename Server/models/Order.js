@@ -42,6 +42,8 @@ const OrderSchema = new Schema({
     name: { type: String, required: true },
     phone1: { type: String, required: true },
     phone2: String,
+    idNumber: String,
+    email: String,
     deliveryAddress: { type: String, required: true },
     invoiceName: String
   },

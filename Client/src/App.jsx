@@ -89,7 +89,9 @@ function App() {
             {user.role === 'MANAGER' && <Route path="/employees" element={<Employees />} />}
             {user.role === 'MANAGER' && <Route path="/catalog" element={<CatalogPage />} />}
             {user.role === 'MANAGER' && <Route path="/manager/new-orders" element={<ManagerNewOrders />} />}
-            {user.role === 'MANAGER' && <Route path="/manager/orders" element={<ManagerOrders />} />}
+            {(user.role === 'MANAGER' || user.role === 'CARPENTER') && (
+              <Route path="/manager/orders" element={<ManagerOrders />} />
+            )}
             {user.role === 'MANAGER' && <Route path="/warehouses" element={<Warehouses />} />}
 
             {/* === ראוטים לאיש מכירות === */}

@@ -119,6 +119,10 @@ const reassignCarpenter = async (productId, newCarpenterId) => {
 // ─── יצירת תמונה עם Abacus AI ─────────────────────────────────
 const generateImageWithAI = async (prompt) => {
   try {
+    if (!process.env.ABACUS_BASE_URL || !process.env.ABACUS_API_KEY) {
+      throw new Error("חסרה הגדרת ABACUS_BASE_URL או ABACUS_API_KEY בשרת");
+    }
+
     const baseUrl = process.env.ABACUS_BASE_URL.endsWith('/v1')
       ? process.env.ABACUS_BASE_URL
       : `${process.env.ABACUS_BASE_URL}/v1`;

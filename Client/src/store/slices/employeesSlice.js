@@ -22,6 +22,15 @@ export const fetchWarehouses = createAsyncThunk('employees/fetchWarehouses', asy
   }
 });
 
+export const fetchEmployeeActiveOrders = createAsyncThunk('employees/fetchEmployeeActiveOrders', async (employeeId, { rejectWithValue }) => {
+  try {
+    const res = await API.get(`/manager/employees/${employeeId}/active-orders`);
+    return { employeeId, orders: res.data };
+  } catch (err) {
+    return rejectWithValue(err.response?.data?.message || 'שגיאה בטעינת הזמנות פעילות של העובד');
+  }
+});
+
 export const createEmployee = createAsyncThunk('employees/create', async (formData, { rejectWithValue }) => {
   try {
     const res = await API.post('/manager/employees', formData, {
@@ -60,6 +69,8 @@ const employeesSlice = createSlice({
   initialState: {
     employees: [],
     warehouses: [],
+    employeeActiveOrders: {},
+    activeOrdersLoadingByEmployee: {},
     loading: false,
     submitLoading: false,
     error: null,
@@ -86,6 +97,20 @@ const employeesSlice = createSlice({
       // fetchWarehouses
       .addCase(fetchWarehouses.fulfilled, (state, action) => {
         state.warehouses = action.payload;
+      })
+      .addCase(fetchEmployeeActiveOrders.pending, (state, action) => {
+        const employeeId = action.meta.arg;
+        state.activeOrdersLoadingByEmployee[employeeId] = true;
+      })
+      .addCase(fetchEmployeeActiveOrders.fulfilled, (state, action) => {
+        const { employeeId, orders } = action.payload;
+        state.activeOrdersLoadingByEmployee[employeeId] = false;
+        state.employeeActiveOrders[employeeId] = orders;
+      })
+      .addCase(fetchEmployeeActiveOrders.rejected, (state, action) => {
+        const employeeId = action.meta.arg;
+        state.activeOrdersLoadingByEmployee[employeeId] = false;
+        state.error = action.payload;
       })
 
       // createEmployee

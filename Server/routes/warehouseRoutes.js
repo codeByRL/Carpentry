@@ -11,6 +11,7 @@ import {
   updateBaseProductStock,
   getAllBaseProducts,
   createBaseProduct,
+  uploadBaseProductImage,
   updateBaseProduct,
   pickMaterial,
   getOrdersWithNewProducts,
@@ -35,7 +36,7 @@ router.get("/low-stock-alerts",                   getLowStockAlerts);
 
 // ─── מוצרי בסיס ──────────────────────────────────────────
 router.get("/base-products",                      getAllBaseProducts);
-router.post("/base-products",                     createBaseProduct);
+router.post("/base-products",                     uploadBaseProductImage.single("image"), createBaseProduct);
 router.put("/base-products/:baseProductId",       updateBaseProduct);
 router.patch("/base-products/:baseProductId/stock",    updateBaseProductStock);
 router.patch("/base-products/:baseProductId/supplied", markBaseProductAsSupplied);

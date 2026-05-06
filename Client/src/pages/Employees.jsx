@@ -5,6 +5,7 @@ import VisibilityIcon from '@mui/icons-material/Visibility';
 import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
+import ListAltIcon from '@mui/icons-material/ListAlt';
 import { Box, Typography, Button, Paper, Table, TableBody, TableCell,
   TableContainer, TableHead, TableRow, Chip, Avatar, IconButton,
   Dialog, DialogTitle, DialogContent, TextField, MenuItem, DialogActions,
@@ -12,6 +13,7 @@ import { Box, Typography, Button, Paper, Table, TableBody, TableCell,
 } from '@mui/material';
 import {
   fetchEmployees, fetchWarehouses,
+  fetchEmployeeActiveOrders,
   createEmployee, updateEmployee, deleteEmployee,
   clearSubmitError
 } from '../store/slices/employeesSlice';
@@ -84,7 +86,10 @@ const TabPanel = ({ children, value, index }) => (
 
 const Employees = () => {
   const dispatch = useDispatch();
-  const { employees, warehouses, loading, submitLoading, submitError } = useSelector(state => state.employees);
+  const {
+    employees, warehouses, loading, submitLoading, submitError,
+    employeeActiveOrders, activeOrdersLoadingByEmployee
+  } = useSelector(state => state.employees);
 
   const [open, setOpen] = useState(false);
   const [isEdit, setIsEdit] = useState(false);
@@ -96,6 +101,8 @@ const Employees = () => {
 
   const [viewOpen, setViewOpen] = useState(false);
   const [viewEmployee, setViewEmployee] = useState(null);
+  const [ordersSpecOpen, setOrdersSpecOpen] = useState(false);
+  const [ordersSpecEmployee, setOrdersSpecEmployee] = useState(null);
 
   // ── סינון ──
   const [filterName, setFilterName]               = useState('');
@@ -171,6 +178,32 @@ const Employees = () => {
   const handleDelete = async (id) => {
     if (!window.confirm('האם למחוק עובד זה?')) return;
     dispatch(deleteEmployee(id));
+  };
+
+  const ORDER_STATUS_LABEL = {
+    QUOTATION_PENDING: 'בהצעת מחיר',
+    ORDERED: 'הזמנה חדשה',
+    WAITING_FOR_WAREHOUSE: 'ממתין למחסן',
+    WAITING_FOR_PICKING: 'ממתין לליקוט',
+    WAITING_FOR_SUPPLY: 'ממתין לאספקה',
+    READY_FOR_SHIPPING: 'מוכן למשלוח',
+    IN_PROGRESS: 'בעבודה',
+    DONE: 'הושלם',
+  };
+
+  const openEmployeeView = (emp) => {
+    setViewEmployee(emp);
+    setViewOpen(true);
+    if (emp?.role === 'CARPENTER' || emp?.role === 'WAREHOUSE') {
+      dispatch(fetchEmployeeActiveOrders(emp._id));
+    }
+  };
+
+  const openEmployeeOrdersSpec = (emp) => {
+    if (emp?.role !== 'CARPENTER' && emp?.role !== 'SALES') return;
+    setOrdersSpecEmployee(emp);
+    setOrdersSpecOpen(true);
+    dispatch(fetchEmployeeActiveOrders(emp._id));
   };
 
   const getRoleColor  = (role) => ({ MANAGER: 'error', CARPENTER: 'primary', WAREHOUSE: 'warning', SALES: 'success', DRIVER: 'secondary' }[role] || 'default');
@@ -297,7 +330,7 @@ const Employees = () => {
                   </TableCell>
                 </TableRow>
               ) : filteredEmployees.map((emp) => (
-                <TableRow key={emp._id} hover>
+                <TableRow key={emp._id} hover onClick={() => openEmployeeView(emp)} sx={{ cursor: 'pointer' }}>
                   <TableCell>
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
                       <Avatar sx={{ bgcolor: 'secondary.main' }}>{emp.fullName?.[0]}</Avatar>
@@ -331,23 +364,34 @@ const Employees = () => {
                   </TableCell>
                   <TableCell align="center">
                     <Tooltip title="צפייה בפרטים">
-                      <IconButton color="info" onClick={() => { setViewEmployee(emp); setViewOpen(true); }}>
+                      <IconButton color="info" onClick={(e) => { e.stopPropagation(); openEmployeeView(emp); }}>
                         <VisibilityIcon />
                       </IconButton>
                     </Tooltip>
+                    {(emp.role === 'CARPENTER' || emp.role === 'SALES') && (
+                      <Tooltip title="מפרט הזמנות פעילות">
+                        <IconButton
+                          color="warning"
+                          onClick={(e) => { e.stopPropagation(); openEmployeeOrdersSpec(emp); }}
+                        >
+                          <ListAltIcon />
+                        </IconButton>
+                      </Tooltip>
+                    )}
                     <Tooltip title="עריכה">
-                      <IconButton color="primary" onClick={() => handleOpenEdit(emp)}>
+                      <IconButton color="primary" onClick={(e) => { e.stopPropagation(); handleOpenEdit(emp); }}>
                         <EditIcon />
                       </IconButton>
                     </Tooltip>
                     <Tooltip title="מחיקה">
-                      <IconButton color="error" onClick={() => handleDelete(emp._id)}>
+                      <IconButton color="error" onClick={(e) => { e.stopPropagation(); handleDelete(emp._id); }}>
                         <DeleteIcon />
                       </IconButton>
                     </Tooltip>
                     {emp.contractFile && (
                       <Tooltip title="הורד חוזה">
                         <IconButton color="success" component="a"
+                          onClick={(e) => e.stopPropagation()}
                           href={`http://localhost:5000/${emp.contractFile}`} target="_blank">
                           <UploadFileIcon />
                         </IconButton>
@@ -517,6 +561,65 @@ const Employees = () => {
                   <Typography sx={{ fontWeight: 600 }}>{label}</Typography>
                 </Box>
               ))}
+              {(viewEmployee.role === 'CARPENTER' || viewEmployee.role === 'WAREHOUSE') && (
+                <Box sx={{ mt: 1 }}>
+                  <Divider sx={{ mb: 1.5 }}>הזמנות פעילות</Divider>
+                  {activeOrdersLoadingByEmployee[viewEmployee._id] ? (
+                    <Box sx={{ display: 'flex', justifyContent: 'center', py: 2 }}>
+                      <CircularProgress size={22} />
+                    </Box>
+                  ) : (
+                    <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: 2 }}>
+                      <Table size="small">
+                        <TableHead>
+                          <TableRow>
+                            <TableCell>מס' הזמנה</TableCell>
+                            <TableCell>לקוח</TableCell>
+                            <TableCell>סטטוס</TableCell>
+                            <TableCell>אספקה משוערת</TableCell>
+                            <TableCell>ימים לאספקה</TableCell>
+                          </TableRow>
+                        </TableHead>
+                        <TableBody>
+                          {(employeeActiveOrders[viewEmployee._id] || []).length === 0 ? (
+                            <TableRow>
+                              <TableCell colSpan={5} align="center" sx={{ py: 2.5, color: 'text.secondary' }}>
+                                אין הזמנות פעילות לעובד זה
+                              </TableCell>
+                            </TableRow>
+                          ) : (
+                            (employeeActiveOrders[viewEmployee._id] || []).map((order) => {
+                              const dueDate = order.estimatedDeliveryDate ? new Date(order.estimatedDeliveryDate) : null;
+                              const now = new Date();
+                              const msPerDay = 24 * 60 * 60 * 1000;
+                              const daysToDue = dueDate ? Math.ceil((dueDate.getTime() - now.getTime()) / msPerDay) : null;
+                              const isUrgent = daysToDue !== null && daysToDue <= 2;
+
+                              return (
+                                <TableRow
+                                  key={order._id}
+                                  sx={isUrgent ? { bgcolor: '#FFEBEE', '& td': { color: '#B71C1C', fontWeight: 600 } } : {}}
+                                >
+                                  <TableCell>#{order._id?.slice(-6)}</TableCell>
+                                  <TableCell>{order.customer?.name || '-'}</TableCell>
+                                  <TableCell>{ORDER_STATUS_LABEL[order.status] || order.status}</TableCell>
+                                  <TableCell>
+                                    {dueDate ? dueDate.toLocaleDateString('he-IL') : '-'}
+                                    {isUrgent ? ' (דחוף)' : ''}
+                                  </TableCell>
+                                  <TableCell>
+                                    {daysToDue === null ? '-' : daysToDue}
+                                  </TableCell>
+                                </TableRow>
+                              );
+                            })
+                          )}
+                        </TableBody>
+                      </Table>
+                    </TableContainer>
+                  )}
+                </Box>
+              )}
               {viewEmployee.contractFile && (
                 <Button variant="outlined" startIcon={<UploadFileIcon />} sx={{ mt: 1 }}
                   component="a" href={`http://localhost:5000/${viewEmployee.contractFile}`} target="_blank">
@@ -531,6 +634,71 @@ const Employees = () => {
             ✏️ עבור לעריכה
           </Button>
           <Button onClick={() => setViewOpen(false)}>סגור</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={ordersSpecOpen} onClose={() => setOrdersSpecOpen(false)} fullWidth maxWidth="md">
+        <DialogTitle sx={{ fontWeight: 'bold', color: '#5D4037' }}>
+          📋 מפרט הזמנות פעילות — {ordersSpecEmployee?.fullName || ''}
+        </DialogTitle>
+        <DialogContent dividers>
+          {!ordersSpecEmployee ? null : (
+            activeOrdersLoadingByEmployee[ordersSpecEmployee._id] ? (
+              <Box sx={{ display: 'flex', justifyContent: 'center', py: 3 }}>
+                <CircularProgress size={24} />
+              </Box>
+            ) : (
+              <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: 2 }}>
+                <Table size="small">
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>מס' הזמנה</TableCell>
+                      <TableCell>לקוח</TableCell>
+                      <TableCell>סטטוס</TableCell>
+                      <TableCell>אספקה משוערת</TableCell>
+                      <TableCell>ימים לאספקה</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {(employeeActiveOrders[ordersSpecEmployee._id] || []).length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={5} align="center" sx={{ py: 2.5, color: 'text.secondary' }}>
+                          אין הזמנות פעילות לעובד זה
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      (employeeActiveOrders[ordersSpecEmployee._id] || []).map((order) => {
+                        const dueDate = order.estimatedDeliveryDate ? new Date(order.estimatedDeliveryDate) : null;
+                        const now = new Date();
+                        const msPerDay = 24 * 60 * 60 * 1000;
+                        const daysToDue = dueDate ? Math.ceil((dueDate.getTime() - now.getTime()) / msPerDay) : null;
+                        const isUrgent = daysToDue !== null && daysToDue <= 2;
+
+                        return (
+                          <TableRow
+                            key={order._id}
+                            sx={isUrgent ? { bgcolor: '#FFEBEE', '& td': { color: '#B71C1C', fontWeight: 600 } } : {}}
+                          >
+                            <TableCell>#{order._id?.slice(-6)}</TableCell>
+                            <TableCell>{order.customer?.name || '-'}</TableCell>
+                            <TableCell>{ORDER_STATUS_LABEL[order.status] || order.status}</TableCell>
+                            <TableCell>
+                              {dueDate ? dueDate.toLocaleDateString('he-IL') : '-'}
+                              {isUrgent ? ' (דחוף)' : ''}
+                            </TableCell>
+                            <TableCell>{daysToDue === null ? '-' : daysToDue}</TableCell>
+                          </TableRow>
+                        );
+                      })
+                    )}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            )
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setOrdersSpecOpen(false)}>סגור</Button>
         </DialogActions>
       </Dialog>
     </Box>

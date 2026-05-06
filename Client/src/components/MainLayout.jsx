@@ -64,9 +64,23 @@ const MainLayout = () => {
     // ✅ דשבורד נפרד למחסנאי
     { text: 'דשבורד מחסן', icon: <WarehouseIcon />, path: '/warehouse', roles: ['WAREHOUSE'] },
 
+    // ✅ הזמנות – גישה קבועה לתצוגת ההזמנות גם לנגר
     { text: 'הזמנות חדשות', icon: <AddShoppingCartIcon />, path: '/manager/new-orders', roles: ['MANAGER'] },
     { text: 'הזמנות פעילות', icon: <ShoppingCartIcon />, path: '/manager/orders', roles: ['MANAGER'] },
+    {
+      text: 'הזמנות פעילות',
+      icon: <ShoppingCartIcon />,
+      path: '/manager/orders',
+      roles: ['CARPENTER'],
+      state: {
+        initialStatusFilter: 'IN_PROGRESS',
+        emptyText: 'אין הזמנות בסטטוס "בעבודה" כרגע',
+      },
+    },
+
+    // ✅ דשבורד נגר
     { text: 'דשבורד נגר', icon: <AssignmentIcon />, path: '/carpenter/dashboard', roles: ['CARPENTER'] },
+
     { text: 'משלוחים', icon: <LocalShippingIcon />, path: '/driver/deliveries', roles: ['DRIVER'] },
     { text: 'קטלוג מוצרים', icon: <CategoryIcon />, path: '/catalog', roles: ['MANAGER', 'SALES'] },
     { text: 'מלאי ומחסן', icon: <InventoryIcon />, path: '/warehouses', roles: ['MANAGER', 'WAREHOUSE'] },
@@ -119,7 +133,7 @@ const MainLayout = () => {
           return (
             <ListItem key={item.path} disablePadding sx={{ mb: 0.5 }}>
               <ListItemButton
-                onClick={() => { navigate(item.path); setMobileOpen(false); }}
+                onClick={() => { navigate(item.path, item.state ? { state: item.state } : undefined); setMobileOpen(false); }}
                 sx={{
                   borderRadius: 2, py: 1, px: 1.5,
                   color: isActive ? 'white' : '#BCAAA4',

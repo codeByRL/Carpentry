@@ -1,7 +1,6 @@
 // server/routes/orderRoute.js
 
 import express from "express";
-import protect from "../middlewares/authenticate.js"; // ייצוג ל-authenticate.js
 import { authorizeRoles } from "../middlewares/authorizeRoles.js";
 import {
   createOrderController,
@@ -16,27 +15,27 @@ import {
 const router = express.Router();
 
 router.route('/')
-  .post(protect, authorizeRoles(['SALES', 'MANAGER']), createOrderController)
+  .post(authorizeRoles('SALES', 'MANAGER'), createOrderController)
   // השינוי: הסרנו את authorizeRoles מה-GET הראשי
-  .get(protect, getAllOrders); 
+  .get(getAllOrders); 
 
 router.route('/:id')
   // נשאר authorizeRoles מאחר וזה לרוב עובד היטב בראוטים ספציפיים
-  .get(protect, authorizeRoles(['SALES', 'CARPENTER', 'MANAGER', 'DRIVER', 'WAREHOUSE']), getOrderById);
+  .get(authorizeRoles('SALES', 'CARPENTER', 'MANAGER', 'DRIVER', 'WAREHOUSE'), getOrderById);
 
 router.route('/status/:status')
   // נשאר authorizeRoles, שכן הוא פועל היטב ברוב המקרים
-  .get(protect, authorizeRoles(['SALES', 'CARPENTER', 'MANAGER', 'DRIVER', 'WAREHOUSE']), getOrdersByStatus);
+  .get(authorizeRoles('SALES', 'CARPENTER', 'MANAGER', 'DRIVER', 'WAREHOUSE'), getOrdersByStatus);
 
 router.route('/:id/assign-carpenter')
-  .put(protect, authorizeRoles(['MANAGER']), assignCarpenter)
-  .patch(protect, authorizeRoles(['MANAGER']), assignCarpenter);
+  .put(authorizeRoles('MANAGER'), assignCarpenter)
+  .patch(authorizeRoles('MANAGER'), assignCarpenter);
 
 router.route('/:id/assign-best-carpenter')
-  .post(protect, authorizeRoles(['MANAGER']), assignBestCarpenter)
-  .patch(protect, authorizeRoles(['MANAGER']), assignBestCarpenter);
+  .post(authorizeRoles('MANAGER'), assignBestCarpenter)
+  .patch(authorizeRoles('MANAGER'), assignBestCarpenter);
 
 router.route('/:id/mark-as-paid')
-  .patch(protect, authorizeRoles(['SALES', 'MANAGER']), markOrderAsPaid);
+  .patch(authorizeRoles('SALES', 'MANAGER'), markOrderAsPaid);
 
 export default router;

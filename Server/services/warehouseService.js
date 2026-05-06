@@ -64,11 +64,14 @@ const pickMaterial = async (orderId, materialId, warehouseUserId) => {
     const baseProduct = await BaseProduct.findById(materialId).session(session);
     if (!baseProduct) throw new Error("Base product not found");
 
-    const available = baseProduct.quantity - baseProduct.reservedQuantity;
-    if (available < material.quantity) throw new Error("Insufficient stock");
+    const physicalStock = Number(baseProduct.quantity || 0);
+    if (physicalStock < material.quantity) throw new Error("Insufficient stock");
 
     baseProduct.quantity -= material.quantity;
-    baseProduct.reservedQuantity -= material.quantity;
+    baseProduct.reservedQuantity = Math.max(
+      Number(baseProduct.reservedQuantity || 0) - material.quantity,
+      0
+    );
     await baseProduct.save({ session });
 
     material.isPicked = true;
@@ -119,6 +122,8 @@ const generatePurchaseList = async () => {
 
   for (const order of orders) {
     for (const material of order.unavailableMaterials) {
+      // מוצר חדש נשאר בקטגוריית "מוצרים חדשים" עד אישור מחסנאי
+      if (material?.product?.isNew) continue;
       const productId = material.product._id.toString();
       const needed = material.neededQuantity || material.quantity;
 
@@ -132,6 +137,19 @@ const generatePurchaseList = async () => {
   const allProducts = await BaseProduct.find();
 
   for (const product of allProducts) {
+    const pendingInitialSupplyQty = Math.max(Number(product.pendingInitialSupplyQty || 0), 0);
+    if (pendingInitialSupplyQty > 0) {
+      const productId = product._id.toString();
+      if (!purchaseMap[productId]) {
+        purchaseMap[productId] = { forOrders: 0, forStock: 0, product: product };
+      }
+      // עדיפות לכמות ההזמנה הראשונית שאושרה ע"י המחסן
+      purchaseMap[productId].forStock = Math.max(purchaseMap[productId].forStock, pendingInitialSupplyQty);
+      continue;
+    }
+
+    // לא להכניס לרכש עד אישור מוצר חדש בטופס המחסן
+    if (product.isNew) continue;
     const productId = product._id.toString();
     const currentAvailable = product.quantity - (product.reservedQuantity || 0);
 
@@ -172,9 +190,14 @@ const getLowStockAlerts = async () => {
 
 const updateStockOnArrival = async (arrivals) => {
   for (const { productId, quantityArrived } of arrivals) {
-    await BaseProduct.findByIdAndUpdate(productId, {
-      $inc: { quantity: quantityArrived }
-    });
+    const product = await BaseProduct.findById(productId);
+    if (!product) continue;
+    product.quantity = Number(product.quantity || 0) + Number(quantityArrived || 0);
+    const pending = Math.max(Number(product.pendingInitialSupplyQty || 0), 0);
+    if (pending > 0) {
+      product.pendingInitialSupplyQty = Math.max(pending - Number(quantityArrived || 0), 0);
+    }
+    await product.save();
   }
 
   const waitingOrders = await Order.find({ status: "WAITING_FOR_SUPPLY" })

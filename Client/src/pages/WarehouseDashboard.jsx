@@ -34,7 +34,7 @@ import {
 import {
   fetchAllOrders, fetchPurchaseList, fetchAllBaseProducts,
   fetchOrdersWithNewProducts, pickMaterialAction, markReadyForShipping,
-  createBaseProductAction, markBaseProductSupplied, clearCreateStatus,
+  createBaseProductAction, clearCreateStatus,
   updateBaseProductAction, markSupplierSentAction, markSupplierArrivedAction,
 } from '../store/slices/warehouseSlice';
 
@@ -49,6 +49,7 @@ const C = {
 };
 
 const STATUS_META = {
+  QUOTATION_PENDING:   { label: 'בהצעת מחיר',   color: '#FFD700' },
   ORDERED:               { label: 'הזמנה חדשה',   color: '#D2691E' },
   WAITING_FOR_WAREHOUSE: { label: 'ממתין למחסן',  color: '#E65100' },
   WAITING_FOR_PICKING:   { label: 'ממתין לליקוט', color: '#A0522D' },
@@ -99,14 +100,24 @@ const StatCard = ({ title, value, sub, color, icon, onClick }) => (
 
 // ─── כרטיס הזמנה ─────────────────────────────────────────
 const OrderCard = ({ order, onPick, onReady, newProductIds }) => {
-  const allPicked  = order.requiredMaterials?.every(m => m.isPicked);
-  const hasMissing = order.status === 'WAITING_FOR_SUPPLY';
+  const allPicked = order.requiredMaterials?.every(m => m.isPicked);
+  const cardTone =
+    order.status === 'WAITING_FOR_SUPPLY' ? 'supply'
+    : order.status === 'WAITING_FOR_PICKING' ? 'pick'
+    : order.status === 'WAITING_FOR_WAREHOUSE' ? 'pending'
+    : 'default';
+
+  const tonePaper = {
+    supply: { border: '1px solid #FFCDD2', bgcolor: '#FFF5F5' },
+    pick: { border: '1px solid #A5D6A7', bgcolor: '#E8F5E9' },
+    pending: { border: '1px solid #FFE082', bgcolor: '#FFFDE7' },
+    default: { border: '1px solid #E0E0E0', bgcolor: 'white' },
+  }[cardTone];
 
   return (
     <Paper sx={{
       p: 3, borderRadius: 3, mb: 2,
-      border: `1px solid ${hasMissing ? '#FFCDD2' : '#E0E0E0'}`,
-      bgcolor: hasMissing ? '#FFF8F8' : 'white',
+      ...tonePaper,
     }}>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2 }}>
         <Box>
@@ -127,10 +138,10 @@ const OrderCard = ({ order, onPick, onReady, newProductIds }) => {
             <Button
               variant="contained" size="small"
               startIcon={<PrintIcon />}
-              onClick={() => onReady(order._id)}
+              onClick={() => onReady(order)}
               sx={{ bgcolor: '#2E7D32', fontSize: 12 }}
             >
-              מוכן למשלוח + הדפס
+              הדפס תווית משלוח
             </Button>
           )}
         </Box>
@@ -346,11 +357,8 @@ const AddBaseProductDialog = ({ open, onClose }) => {
       <DialogTitle sx={{ fontWeight: 700, color: C.dark }}>➕ הוספת מוצר בסיס חדש למחסן</DialogTitle>
       <DialogContent>
         <Grid container spacing={2} sx={{ mt: 0.5 }}>
-          <Grid size={{ xs: 8 }}>
+          <Grid size={{ xs: 12 }}>
             <TextField fullWidth size="small" label="שם המוצר *" value={form.name} onChange={handleChange('name')} />
-          </Grid>
-          <Grid size={{ xs: 4 }}>
-            <TextField fullWidth size="small" label="קוד (SKU)" value={form.code} onChange={handleChange('code')} />
           </Grid>
           <Grid size={{ xs: 4 }}>
             <TextField fullWidth size="small" label="יחידת מידה *" value={form.unit} onChange={handleChange('unit')} placeholder='מ"ר, יח׳, מ"ל' />
@@ -443,6 +451,10 @@ const EditBaseProductDialog = ({ open, product, onClose, onSaved }) => {
 
   const handleSubmit = async () => {
     if (!form.name || !form.unit) return;
+    if (product?.isNew && (!String(form.supplier || '').trim() || Number(form.quantity) < 0)) {
+      setError('למוצר חדש חובה להזין ספק וכמות התחלתית תקינה לפני אישור');
+      return;
+    }
     setSaving(true);
     setError('');
     try {
@@ -455,6 +467,7 @@ const EditBaseProductDialog = ({ open, product, onClose, onSaved }) => {
           reorderQuantity: Number(form.reorderQuantity),
           priceDelta:      Number(form.priceDelta),
           materialType:    form.isMaterial && form.materialType ? form.materialType : undefined,
+          confirmNewProduct: !!product?.isNew,
         },
       })).unwrap();
       onSaved?.();
@@ -472,7 +485,7 @@ const EditBaseProductDialog = ({ open, product, onClose, onSaved }) => {
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
       <DialogTitle sx={{ fontWeight: 700, color: C.dark, display: 'flex', alignItems: 'center', gap: 1 }}>
         <EditIcon sx={{ color: C.primary }} />
-        עריכת מוצר: {product.name}
+        {product.isNew ? 'אישור מוצר חדש והכנסה למלאי' : `עריכת מוצר: ${product.name}`}
       </DialogTitle>
       <DialogContent>
         <Grid container spacing={2} sx={{ mt: 0.5 }}>
@@ -480,13 +493,20 @@ const EditBaseProductDialog = ({ open, product, onClose, onSaved }) => {
             <TextField fullWidth size="small" label="שם המוצר *" value={form.name} onChange={handleChange('name')} />
           </Grid>
           <Grid size={{ xs: 4 }}>
-            <TextField fullWidth size="small" label="קוד (SKU)" value={form.code} onChange={handleChange('code')} />
+            <TextField fullWidth size="small" label="קוד (אוטומטי)" value={form.code} InputProps={{ readOnly: true }} />
           </Grid>
           <Grid size={{ xs: 4 }}>
             <TextField fullWidth size="small" label="יחידת מידה *" value={form.unit} onChange={handleChange('unit')} />
           </Grid>
           <Grid size={{ xs: 4 }}>
-            <TextField fullWidth size="small" label="כמות במלאי" type="number" value={form.quantity} onChange={handleChange('quantity')} />
+            <TextField
+              fullWidth
+              size="small"
+              label={product?.isNew ? "כמות להזמנה ראשונית" : "כמות במלאי"}
+              type="number"
+              value={form.quantity}
+              onChange={handleChange('quantity')}
+            />
           </Grid>
           <Grid size={{ xs: 4 }}>
             <TextField fullWidth size="small" label="מינימום מלאי" type="number" value={form.minStock} onChange={handleChange('minStock')} />
@@ -535,7 +555,9 @@ const EditBaseProductDialog = ({ open, product, onClose, onSaved }) => {
       <DialogActions sx={{ p: 2 }}>
         <Button onClick={onClose} sx={{ color: '#9E9E9E' }}>ביטול</Button>
         <Button variant="contained" onClick={handleSubmit} disabled={saving || !form.name || !form.unit} sx={{ bgcolor: C.primary }}>
-          {saving ? <CircularProgress size={20} sx={{ color: 'white' }} /> : 'שמור שינויים'}
+          {saving
+            ? <CircularProgress size={20} sx={{ color: 'white' }} />
+            : (product?.isNew ? 'אשר והכנס לרכש' : 'שמור שינויים')}
         </Button>
       </DialogActions>
     </Dialog>
@@ -553,7 +575,6 @@ const WarehouseDashboard = () => {
   const [addDialogOpen, setAddDialogOpen]     = useState(false);
   const [editProduct, setEditProduct]         = useState(null);
   const [snackMsg, setSnackMsg]               = useState('');
-  const [supplyingIds, setSupplyingIds]       = useState([]);
   const [loadingSupplier, setLoadingSupplier] = useState(null);
 
   useEffect(() => {
@@ -567,12 +588,8 @@ const WarehouseDashboard = () => {
   const { notifications } = useSelector(s => s.notifications);
   const chatState = useSelector(s => s.chat);
 
-  const totalUnreadChatCount = (
-    (chatState?.unreadMessagesCount
-      ? Object.values(chatState.unreadMessagesCount).reduce((a, b) => a + (b || 0), 0)
-      : 0) ||
-    (chatState?.activeChatPartners?.reduce((acc, p) => acc + (p.unreadCount || 0), 0) || 0)
-  );
+  const totalUnreadChatCount =
+    chatState?.activeChatPartners?.reduce((acc, p) => acc + (Number(p.unreadCount) || 0), 0) || 0;
 
   const newProductIds = (baseProducts || []).filter(p => p.isNew).map(p => p._id?.toString());
 
@@ -585,24 +602,87 @@ const WarehouseDashboard = () => {
     dispatch(fetchOrdersWithNewProducts());
   }, [dispatch]);
 
-  const handlePick = (orderId, materialId) =>
-    dispatch(pickMaterialAction({ orderId, materialId, warehouseUserId: user?.id || user?._id }));
-
-  const handleReady = (orderId) => {
-    dispatch(markReadyForShipping(orderId));
-    window.print();
+  const handlePick = async (orderId, materialId) => {
+    try {
+      const updatedOrder = await dispatch(
+        pickMaterialAction({ orderId, materialId, warehouseUserId: user?.id || user?._id })
+      ).unwrap();
+      const allPicked = (updatedOrder?.requiredMaterials || []).every((m) => !!m.isPicked);
+      if (allPicked) {
+        printShippingLabel(updatedOrder);
+        setSnackMsg('כל החומרים נלקטו — נפתחה תווית להדפסה');
+      }
+    } catch (e) {
+      setSnackMsg('שגיאה בסימון ליקוט ❌');
+    }
   };
 
-  // ✅ תוספת: רענון purchaseList אחרי סימון כסופק
-  const handleSupplied = async (productId) => {
-    const qty = prompt('כמה יחידות הגיעו?');
-    if (!qty || isNaN(qty)) return;
-    setSupplyingIds(prev => [...prev, productId]);
-    await dispatch(markBaseProductSupplied({ baseProductId: productId, quantity: Number(qty) }));
-    setSupplyingIds(prev => prev.filter(id => id !== productId));
-    setSnackMsg('המוצר עודכן בהצלחה ✅');
-    dispatch(fetchPurchaseList());
-    dispatch(fetchAllBaseProducts());
+  const printShippingLabel = (order) => {
+    const carpenterName = order?.assignedCarpenter?.fullName || 'לא משויך';
+    const carpenterAddress = order?.assignedCarpenter?.address || 'לא הוגדרה כתובת לנגר';
+    const carpenterPhone = order?.assignedCarpenter?.phone || '—';
+    const customerName = order?.customer?.name || '—';
+    const customerAddress = order?.customer?.deliveryAddress || '—';
+    const customerPhone = order?.customer?.phone1 || '—';
+    const orderCode = order?._id ? `#${order._id.slice(-6)}` : '—';
+    const printDate = new Date().toLocaleString('he-IL');
+
+    const labelHtml = `
+      <html dir="rtl" lang="he">
+        <head>
+          <title>תווית משלוח ${orderCode}</title>
+          <style>
+            body { font-family: Arial, sans-serif; margin: 0; padding: 16px; color: #222; }
+            .label { border: 2px dashed #444; border-radius: 8px; padding: 16px; max-width: 560px; }
+            .title { font-size: 20px; font-weight: 700; margin-bottom: 8px; }
+            .meta { font-size: 12px; color: #666; margin-bottom: 12px; }
+            .section { margin-top: 10px; }
+            .section-title { font-weight: 700; margin-bottom: 4px; }
+            .line { margin: 2px 0; }
+          </style>
+        </head>
+        <body>
+          <div class="label">
+            <div class="title">תווית משלוח להזמנה ${orderCode}</div>
+            <div class="meta">הודפס בתאריך: ${printDate}</div>
+
+            <div class="section">
+              <div class="section-title">פרטי הזמנה</div>
+              <div class="line">לקוח: ${customerName}</div>
+              <div class="line">כתובת לקוח: ${customerAddress}</div>
+              <div class="line">טלפון לקוח: ${customerPhone}</div>
+            </div>
+
+            <div class="section">
+              <div class="section-title">נגר משויך</div>
+              <div class="line">שם: ${carpenterName}</div>
+              <div class="line">כתובת: ${carpenterAddress}</div>
+              <div class="line">טלפון: ${carpenterPhone}</div>
+            </div>
+          </div>
+        </body>
+      </html>
+    `;
+
+    const printWindow = window.open('', '_blank', 'width=720,height=900');
+    if (!printWindow) {
+      setSnackMsg('הדפדפן חסם חלון הדפסה. אפשרי חלונות קופצים ונסי שוב.');
+      return;
+    }
+    printWindow.document.open();
+    printWindow.document.write(labelHtml);
+    printWindow.document.close();
+    printWindow.focus();
+    setTimeout(() => {
+      printWindow.print();
+      printWindow.close();
+    }, 250);
+  };
+
+  const handleReady = (order) => {
+    if (!order?._id) return;
+    printShippingLabel(order);
+    dispatch(markReadyForShipping(order._id));
   };
 
   const handleMarkSent = async (supplierName) => {
@@ -646,6 +726,18 @@ const WarehouseDashboard = () => {
 
   const pickingOrders = (orders || []).filter(o => o.status === 'WAITING_FOR_PICKING');
   const supplyOrders  = (orders || []).filter(o => o.status === 'WAITING_FOR_SUPPLY');
+  const pendingWarehouseOrders = (orders || []).filter(o => o.status === 'WAITING_FOR_WAREHOUSE');
+
+  const warehouseQueueStatuses = ['WAITING_FOR_SUPPLY', 'WAITING_FOR_PICKING', 'WAITING_FOR_WAREHOUSE'];
+  const allWarehouseQueueOrders = (orders || [])
+    .filter(o => warehouseQueueStatuses.includes(o.status))
+    .sort((a, b) => {
+      const rank = (s) => (s === 'WAITING_FOR_SUPPLY' ? 0 : s === 'WAITING_FOR_PICKING' ? 1 : 2);
+      const d = rank(a.status) - rank(b.status);
+      if (d !== 0) return d;
+      return new Date(b.orderDate || 0) - new Date(a.orderDate || 0);
+    });
+
   const readyOrders   = (orders || []).filter(o => o.status === 'READY_FOR_SHIPPING');
   const unreadNotif   = (notifications || []).filter(n => !n.isRead && n.type !== 'CHAT').length;
 
@@ -657,7 +749,10 @@ const WarehouseDashboard = () => {
   const stats = [
     {
       title: 'ממתינות לליקוט', value: pickingOrders.length,
-      sub: 'מוכנות לאיסוף', color: '#A0522D',
+      sub: pendingWarehouseOrders.length > 0
+        ? `${pendingWarehouseOrders.length} הזמנות ישנות ללא סיווג — בטאב "כל ההזמנות"`
+        : 'מוכנות לאיסוף (הכל במלאי)',
+      color: '#A0522D',
       icon: <HourglassEmptyIcon sx={{ fontSize: 24 }} />,
       onClick: () => setTab(0),
     },
@@ -679,7 +774,7 @@ const WarehouseDashboard = () => {
       sub: totalUnreadChatCount > 0 ? `${totalUnreadChatCount} הודעות צ'אט` : 'אין חדש',
       color: '#5D4037',
       icon: <ChatIcon sx={{ fontSize: 24 }} />,
-      onClick: () => setTab(4),
+      onClick: () => setTab(5),
     },
   ];
 
@@ -690,7 +785,7 @@ const WarehouseDashboard = () => {
   );
 
   return (
-    <Box sx={{ p: 3 }}>
+    <Box sx={{ p: 3, width: '100%', maxWidth: '100%', mx: 'auto', boxSizing: 'border-box' }}>
       <Box sx={{ mb: 3, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
         <Box>
           <Typography sx={{ fontSize: 22, fontWeight: 700, color: C.dark }}>
@@ -711,13 +806,13 @@ const WarehouseDashboard = () => {
         <Alert
           severity="warning" icon={<NewReleasesIcon />}
           sx={{ mb: 2, fontWeight: 600, cursor: 'pointer' }}
-          onClick={() => setTab(3)}
+          onClick={() => setTab(4)}
         >
           יש {ordersWithNewProducts.length} הזמנות עם מוצרי בסיס חדשים שדורשים אספקה ראשונית — לחץ לצפייה במלאי
         </Alert>
       )}
 
-      <Grid container spacing={2} sx={{ mb: 3 }}>
+      <Grid container spacing={2} sx={{ mb: 3, justifyContent: 'center' }}>
         {stats.map((s, i) => (
           <Grid size={{ xs: 6, md: 3 }} key={i}>
             <StatCard {...s} />
@@ -736,9 +831,10 @@ const WarehouseDashboard = () => {
           }}
         >
           <Tab label={`📦 ליקוט (${pickingOrders.length})`} />
-          <Tab label={`⚠️ חוסרים להזמנות פעילות  (${supplyOrders.length})`} />
+          <Tab label={`⚠️ ממתין לאספקה (${supplyOrders.length})`} />
+          <Tab label={`📋 כל ההזמנות (${allWarehouseQueueOrders.length})`} />
           <Tab label={`🛒 רכש מרוכז${supplierNames.length > 0 ? ` (${supplierNames.length})` : ''}`} />
-          <Tab label={`📊 מלאי${newProductIds.length > 0 ? ` 🆕${newProductIds.length}` : ''}`} />
+          <Tab label={`📊 מלאי${newProductIds.length > 0 ? ` (${newProductIds.length} חדשים באספקה)` : ''}`} />
           <Tab label={`💬 צ'אט${totalUnreadChatCount > 0 ? ` (${totalUnreadChatCount})` : ''}`} />
         </Tabs>
 
@@ -767,6 +863,23 @@ const WarehouseDashboard = () => {
           )}
 
           {tab === 2 && (
+            <Box>
+              <Alert severity="info" sx={{ mb: 2 }}>
+                רקע ירוק — כל החומרים זמינים לליקוט. רקע אדום — חסר במלאי (ממתין לאספקה).
+                {pendingWarehouseOrders.length > 0 && (
+                  <> רקע צהוב — סטטוס ישן &quot;ממתין למחסן&quot; (לפני סיווג אוטומטי).</>
+                )}
+              </Alert>
+              {allWarehouseQueueOrders.length === 0
+                ? <Alert severity="success">אין הזמנות בתור המחסן 🎉</Alert>
+                : allWarehouseQueueOrders.map(o => (
+                    <OrderCard key={o._id} order={o} onPick={handlePick} onReady={handleReady} newProductIds={newProductIds} />
+                  ))
+              }
+            </Box>
+          )}
+
+          {tab === 3 && (
             <Box>
               {supplierNames.length > 0 && (
                 <Box sx={{ display: 'flex', gap: 2, mb: 2.5, flexWrap: 'wrap' }}>
@@ -802,7 +915,7 @@ const WarehouseDashboard = () => {
             </Box>
           )}
 
-          {tab === 3 && (
+          {tab === 4 && (
             <Box>
               <Box sx={{ mb: 2, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <TextField
@@ -905,11 +1018,10 @@ const WarehouseDashboard = () => {
                               {isNew && (
                                 <Button
                                   size="small" variant="outlined"
-                                  disabled={supplyingIds.includes(product._id)}
-                                  onClick={() => handleSupplied(product._id)}
+                                  onClick={() => setEditProduct(product)}
                                   sx={{ fontSize: 11, color: '#E65100', borderColor: '#E65100' }}
                                 >
-                                  {supplyingIds.includes(product._id) ? '...מעדכן' : 'סמן כסופק'}
+                                  עדכן מוצר במלאי
                                 </Button>
                               )}
                             </Box>
@@ -923,7 +1035,7 @@ const WarehouseDashboard = () => {
             </Box>
           )}
 
-          {tab === 4 && (
+          {tab === 5 && (
             <Box>
               {totalUnreadChatCount > 0 && (
                 <Box

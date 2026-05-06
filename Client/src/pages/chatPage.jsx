@@ -49,6 +49,7 @@ import {
 } from "../store/slices/chatSlice";
 import { selectUser } from "../store/slices/authSlice";
 import { authService } from "../services/authService";
+import { fetchNotifications } from "../store/slices/notificationsSlice";
 
 const ChatPage = () => {
   const { partnerId: urlPartnerId } = useParams();
@@ -109,7 +110,13 @@ const ChatPage = () => {
     if (urlPartnerId && urlPartnerId !== "undefined" && authToken) {
       dispatch(setActivePartner(urlPartnerId));
       dispatch(fetchChatHistory(urlPartnerId));
-      dispatch(markChatMessagesAsRead(urlPartnerId));
+      dispatch(markChatMessagesAsRead(urlPartnerId))
+        .unwrap()
+        .then(() => {
+          dispatch(fetchNotifications());
+          dispatch(fetchActiveChatPartners());
+        })
+        .catch(() => {});
       dispatch(markRoomAsRead(urlPartnerId));
     }
   }, [authToken, urlPartnerId, dispatch]);
@@ -121,7 +128,13 @@ const ChatPage = () => {
       activePartnerId !== urlPartnerId
     ) {
       dispatch(fetchChatHistory(activePartnerId));
-      dispatch(markChatMessagesAsRead(activePartnerId));
+      dispatch(markChatMessagesAsRead(activePartnerId))
+        .unwrap()
+        .then(() => {
+          dispatch(fetchNotifications());
+          dispatch(fetchActiveChatPartners());
+        })
+        .catch(() => {});
       dispatch(markRoomAsRead(activePartnerId));
     }
   }, [activePartnerId, dispatch, urlPartnerId]);

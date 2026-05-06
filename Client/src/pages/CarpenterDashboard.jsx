@@ -1,4 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { useDispatch, useSelector } from "react-redux";
+import { useNavigate } from "react-router-dom";
 import {
   Alert,
   Box,
@@ -18,9 +20,32 @@ import {
   TextField,
   Typography,
 } from "@mui/material";
+import HourglassEmptyIcon from "@mui/icons-material/HourglassEmpty";
+import AssignmentIcon from "@mui/icons-material/Assignment";
+import PauseCircleOutlineIcon from "@mui/icons-material/PauseCircleOutline";
+import LocalShippingIcon from "@mui/icons-material/LocalShipping";
 import AddIcon from "@mui/icons-material/Add";
 import DeleteIcon from "@mui/icons-material/Delete";
+import ChatIcon from "@mui/icons-material/Chat";
 import API from "../services/api";
+import { fetchNotifications, markNotificationRead } from "../store/slices/notificationsSlice";
+import { fetchActiveChatPartners } from "../store/slices/chatSlice";
+
+const C = {
+  primary: "#D2691E",
+  dark: "#3E2723",
+  medium: "#A0522D",
+  light: "#FBF0E9",
+  border: "#E5D5C8",
+};
+
+const STAT_COLORS = ["#D2691E", "#6B3520", "#A0522D", "#2E7D32"];
+const STAT_ICONS = [
+  <HourglassEmptyIcon sx={{ fontSize: 26 }} />,
+  <AssignmentIcon sx={{ fontSize: 26 }} />,
+  <PauseCircleOutlineIcon sx={{ fontSize: 26 }} />,
+  <LocalShippingIcon sx={{ fontSize: 26 }} />,
+];
 
 const cardSx = {
   borderRadius: 3,
@@ -33,7 +58,43 @@ const sectionTitleSx = { fontWeight: 700, fontSize: 16, color: "#4E342E", mb: 1.
 const BASE_URL = import.meta.env.VITE_REACT_APP_API_URL || "http://localhost:5001";
 const HOURS_PER_WORK_WEEK = 40;
 
+const StatCard = ({ title, value, sub, color, icon, onClick, active }) => (
+  <Box
+    onClick={onClick}
+    sx={{
+      bgcolor: color,
+      borderRadius: 3,
+      p: 2.5,
+      height: 130,
+      cursor: "pointer",
+      display: "flex",
+      flexDirection: "column",
+      justifyContent: "space-between",
+      transition: "0.15s",
+      outline: active ? "2px solid rgba(255,255,255,0.75)" : "none",
+      "&:hover": { transform: "translateY(-2px)", opacity: 0.92 },
+    }}
+  >
+    <Box sx={{ display: "flex", justifyContent: "space-between" }}>
+      <Typography sx={{ fontSize: 13, color: "rgba(255,255,255,0.85)", fontWeight: 500 }}>
+        {title}
+      </Typography>
+      <Box sx={{ color: "rgba(255,255,255,0.7)" }}>{icon}</Box>
+    </Box>
+    <Box>
+      <Typography sx={{ fontSize: 32, fontWeight: 700, color: "white", lineHeight: 1 }}>
+        {value}
+      </Typography>
+      <Typography sx={{ fontSize: 11, color: "rgba(255,255,255,0.7)", mt: 0.4 }}>
+        {sub}
+      </Typography>
+    </Box>
+  </Box>
+);
+
 const CarpenterDashboard = () => {
+  const dispatch = useDispatch();
+  const navigate = useNavigate();
   const [orders, setOrders] = useState([]);
   const [catalogProducts, setCatalogProducts] = useState([]);
   const [materials, setMaterials] = useState([]);
@@ -48,6 +109,9 @@ const CarpenterDashboard = () => {
   const [newMaterialUnit, setNewMaterialUnit] = useState("יח׳");
   const [newMaterialSupplier, setNewMaterialSupplier] = useState("");
   const [newMaterialDescription, setNewMaterialDescription] = useState("");
+  const { notifications } = useSelector((s) => s.notifications);
+  const chatState = useSelector((s) => s.chat);
+  const [ordersTab, setOrdersTab] = useState("WAITING"); // WAITING | ACTIVE | PAUSED | DONE
   const [characterizeForm, setCharacterizeForm] = useState({
     estimatedWorkWeeks: "",
     needsWoodSelection: false,
@@ -80,6 +144,15 @@ const CarpenterDashboard = () => {
     loadData();
   }, []);
 
+  useEffect(() => {
+    dispatch(fetchActiveChatPartners());
+    dispatch(fetchNotifications());
+  }, [dispatch]);
+
+  const totalUnreadChatCount =
+    chatState?.activeChatPartners?.reduce((acc, p) => acc + (Number(p.unreadCount) || 0), 0) || 0;
+  const unreadNotif = (notifications || []).filter((n) => !n.isRead && n.type !== "CHAT").length;
+
   const waitingForWork = useMemo(
     () => orders.filter((o) => o.status === "READY_FOR_SHIPPING" && !o.receivedByCarpenter && !o.carpenterCompletedAt),
     [orders]
@@ -104,6 +177,13 @@ const CarpenterDashboard = () => {
     () => orders.filter((o) => o.status === "READY_FOR_SHIPPING" && !!o.carpenterCompletedAt),
     [orders]
   );
+
+  const stats = [
+    { key: "WAITING", title: "ממתינות להתחלה", value: waitingForWork.length, sub: "מוכנות להתחלת עבודה" },
+    { key: "ACTIVE", title: "בעבודה", value: activeWork.length, sub: "עבודות פעילות" },
+    { key: "PAUSED", title: "מושהות", value: pausedWork.length, sub: "תקלה/המתנה" },
+    { key: "DONE", title: "ממתינות למוביל", value: doneWaitingDriver.length, sub: "הושלמו אצל הנגר" },
+  ];
 
   const runAction = async (requestFn) => {
     try {
@@ -299,7 +379,7 @@ const CarpenterDashboard = () => {
   }
 
   return (
-    <Box sx={{ width: "100%" }}>
+    <Box sx={{ width: "100%", maxWidth: "100%", mx: "auto", boxSizing: "border-box" }}>
       <Typography sx={{ fontSize: 22, fontWeight: 700, color: "#3E2723", mb: 3 }}>
         דשבורד נגר
       </Typography>
@@ -310,8 +390,89 @@ const CarpenterDashboard = () => {
         </Alert>
       )}
 
-      <Grid container spacing={2.2}>
-        <Grid item xs={12} md={6}>
+      {/* ריבועי סטטוס להזמנות (לחיץ) */}
+      <Grid container spacing={2} sx={{ mb: 2.5 }}>
+        {stats.map((s, i) => (
+          <Grid key={s.key} size={{ xs: 6, md: 3 }}>
+            <StatCard
+              title={s.title}
+              value={s.value}
+              sub={s.sub}
+              color={STAT_COLORS[i]}
+              icon={STAT_ICONS[i]}
+              active={ordersTab === s.key}
+              onClick={() => setOrdersTab(s.key)}
+            />
+          </Grid>
+        ))}
+      </Grid>
+
+      <Card sx={{ ...cardSx, mb: 2.2 }}>
+        <CardContent>
+          <Typography sx={sectionTitleSx}>התראות וצ'אט</Typography>
+          {totalUnreadChatCount > 0 && (
+            <Box
+              onClick={() => navigate("/chat")}
+              sx={{
+                mb: 2,
+                p: 2,
+                borderRadius: 2,
+                bgcolor: "#D2691E",
+                color: "white",
+                display: "flex",
+                alignItems: "center",
+                gap: 2,
+                cursor: "pointer",
+                boxShadow: "0 4px 12px rgba(210, 105, 30, 0.3)",
+              }}
+            >
+              <ChatIcon />
+              <Box>
+                <Typography sx={{ fontWeight: 700, fontSize: 14 }}>הודעות צ'אט חדשות!</Typography>
+                <Typography sx={{ fontSize: 12, opacity: 0.9 }}>
+                  יש לך {totalUnreadChatCount} הודעות שמחכות לך
+                </Typography>
+              </Box>
+            </Box>
+          )}
+          {unreadNotif === 0 && totalUnreadChatCount === 0 ? (
+            <Alert severity="info">אין התראות חדשות</Alert>
+          ) : (
+            (notifications || [])
+              .filter((n) => !n.isRead && n.type !== "CHAT")
+              .map((n) => (
+                <Box
+                  key={n._id || n.id}
+                  sx={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    py: 1.2,
+                    borderBottom: "1px solid #EFE0D4",
+                  }}
+                >
+                  <Box sx={{ flex: 1 }}>
+                    <Typography sx={{ fontSize: 12.5 }}>{n.message || n.text}</Typography>
+                    <Typography sx={{ fontSize: 10, color: "#A1887F" }}>
+                      {new Date(n.createdAt).toLocaleString("he-IL")}
+                    </Typography>
+                  </Box>
+                  <IconButton
+                    size="small"
+                    sx={{ color: "#D2691E" }}
+                    onClick={() => dispatch(markNotificationRead(n._id || n.id))}
+                  >
+                    ✓
+                  </IconButton>
+                </Box>
+              ))
+          )}
+        </CardContent>
+      </Card>
+
+      <Grid container spacing={2.2} sx={{ justifyContent: "center" }}>
+        {ordersTab === "WAITING" && (
+        <Grid size={{ xs: 12, md: 6 }}>
           <Card sx={cardSx}>
             <CardContent>
               <Typography sx={sectionTitleSx}>הזמנות שממתינות לתחילת עבודה</Typography>
@@ -339,8 +500,10 @@ const CarpenterDashboard = () => {
             </CardContent>
           </Card>
         </Grid>
+        )}
 
-        <Grid item xs={12} md={6}>
+        {ordersTab === "ACTIVE" && (
+        <Grid size={{ xs: 12, md: 6 }}>
           <Card sx={cardSx}>
             <CardContent>
               <Typography sx={sectionTitleSx}>עבודות פעילות (בעבודה)</Typography>
@@ -379,8 +542,10 @@ const CarpenterDashboard = () => {
             </CardContent>
           </Card>
         </Grid>
+        )}
 
-        <Grid item xs={12} md={6}>
+        {ordersTab === "DONE" && (
+        <Grid size={{ xs: 12, md: 6 }}>
           <Card sx={cardSx}>
             <CardContent>
               <Typography sx={sectionTitleSx}>עבודות שסיימתי וממתינות למוביל</Typography>
@@ -399,13 +564,16 @@ const CarpenterDashboard = () => {
             </CardContent>
           </Card>
         </Grid>
+        )}
 
-        <Grid item xs={12} md={6}>
+        <Grid size={{ xs: 12, md: 6 }}>
           <Card sx={cardSx}>
             <CardContent>
-              <Typography sx={sectionTitleSx}>מוצרי קטלוג הממתינים לאפיון</Typography>
+              <Typography sx={sectionTitleSx}>
+                מוצרי קטלוג הממתינים לאפיון ({catalogProducts.length})
+              </Typography>
               {catalogProducts.length === 0 ? (
-                <Alert severity="info">אין כרגע מוצרים שממתינים לאפיון</Alert>
+                <Alert severity="info">אין כרגע מוצרים שממתינים לאפיון (0)</Alert>
               ) : (
                 catalogProducts.map((p) => (
                   <Box key={p._id} sx={{ p: 1.2, mb: 1.2, border: "1px solid #EFE0D4", borderRadius: 2 }}>
@@ -427,7 +595,8 @@ const CarpenterDashboard = () => {
           </Card>
         </Grid>
 
-        <Grid item xs={12}>
+        {ordersTab === "PAUSED" && (
+        <Grid size={{ xs: 12 }}>
           <Card sx={cardSx}>
             <CardContent>
               <Typography sx={sectionTitleSx}>עבודות מושהות בשל תקלה</Typography>
@@ -456,6 +625,7 @@ const CarpenterDashboard = () => {
             </CardContent>
           </Card>
         </Grid>
+        )}
       </Grid>
 
       <Dialog open={!!pauseDialogOrder} onClose={() => setPauseDialogOrder(null)} maxWidth="sm" fullWidth>

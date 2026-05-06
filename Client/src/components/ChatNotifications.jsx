@@ -5,37 +5,40 @@ import ChatIcon from "@mui/icons-material/Chat";
 import { useSelector, useDispatch } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 import { fetchNotifications } from '../store/slices/notificationsSlice';
+import { fetchActiveChatPartners } from '../store/slices/chatSlice';
 
 const ChatNotifications = () => {
   const dispatch = useDispatch();
   const navigate = useNavigate();
   const { user } = useSelector(s => s.auth);
-  
-  const notifications = useSelector(s => s.notifications.notifications || []);
-  const chatNotifications = notifications.filter(n => n.type === 'CHAT' && !n.isRead);
-  const totalUnreadChatCount = chatNotifications.length;
+  const chatState = useSelector(s => s.chat);
 
-  const fetchNotificationsPeriodically = useCallback(() => {
-    if (user?._id) {
-      dispatch(fetchNotifications());
-    }
-  }, [user?._id, dispatch]);
+  const totalUnreadChatCount =
+    chatState?.activeChatPartners?.reduce((acc, p) => acc + (Number(p.unreadCount) || 0), 0) || 0;
+
+  const uid = user?.id || user?._id;
+
+  const refresh = useCallback(() => {
+    if (!uid) return;
+    dispatch(fetchNotifications());
+    dispatch(fetchActiveChatPartners());
+  }, [uid, dispatch]);
 
   useEffect(() => {
-    fetchNotificationsPeriodically();
-    const interval = setInterval(fetchNotificationsPeriodically, 15000);
+    refresh();
+    const interval = setInterval(refresh, 15000);
     return () => clearInterval(interval);
-  }, [fetchNotificationsPeriodically]);
+  }, [refresh]);
 
   return (
-    <IconButton 
+    <IconButton
       onClick={() => navigate('/chat')}
-      color="inherit" 
+      color="inherit"
       aria-label="התראות צ'אט"
     >
-      <Badge 
-        badgeContent={totalUnreadChatCount} 
-        color="error" 
+      <Badge
+        badgeContent={totalUnreadChatCount}
+        color="error"
         max={99}
       >
         <ChatIcon />

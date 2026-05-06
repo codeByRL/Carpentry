@@ -13,6 +13,7 @@ const BaseProductSchema = new Schema({
   shelfLocation: String,
   supplier: String,
   isNew: { type: Boolean, default: false },
+  pendingInitialSupplyQty: { type: Number, default: 0 },
 
   // שדות חדשים לחומר/בחירת חומר בהזמנה
   isMaterial: { type: Boolean, default: false },                      // האם הפריט משמש כחומר לבחירה (עץ/בד)

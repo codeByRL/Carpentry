@@ -1,5 +1,6 @@
 import * as chatService from '../services/chatService.js';
 import User from '../models/User.js';
+import { markChatNotificationsFromPartnerAsRead } from '../services/notificationService.js';
 
 const sendMsg = async (req, res, next) => {
   try {
@@ -15,8 +16,10 @@ const sendMsg = async (req, res, next) => {
 const getHistory = async (req, res, next) => {
   try {
     const { partnerId } = req.params;
-    const history = await chatService.getChatHistory(req.user.id, partnerId);
-    await chatService.markChatAsRead(req.user.id, partnerId);
+    const userId = req.user.id || req.user._id;
+    const history = await chatService.getChatHistory(userId, partnerId);
+    await chatService.markChatAsRead(userId, partnerId);
+    await markChatNotificationsFromPartnerAsRead(userId, partnerId);
     res.json(history);
   } catch (error) {
     console.error("Error in getHistory:", error);

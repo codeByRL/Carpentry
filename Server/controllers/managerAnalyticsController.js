@@ -1,5 +1,6 @@
 import * as analyticsService from "../services/managerAnalyticsService.js";
 import User from "../models/User.js";
+import Order from "../models/Order.js";
 import multer from "multer";
 import path from "path";
 import fs from "fs";
@@ -40,6 +41,53 @@ export const getAllEmployees = async (req, res) => {
   } catch (error) {
     console.error("Error in getAllEmployees:", error); // ← ידפיס בטרמינל השרת
     res.status(500).json({ message: "שגיאה בטעינת עובדים", error: error.message });
+  }
+};
+
+// GET /api/manager/employees/:id/active-orders
+export const getEmployeeActiveOrders = async (req, res) => {
+  try {
+    const employee = await User.findById(req.params.id).select("fullName role");
+    if (!employee) {
+      return res.status(404).json({ message: "עובד לא נמצא" });
+    }
+
+    const activeStatuses = {
+      $in: [
+        "ORDERED",
+        "WAITING_FOR_WAREHOUSE",
+        "WAITING_FOR_PICKING",
+        "WAITING_FOR_SUPPLY",
+        "READY_FOR_SHIPPING",
+        "IN_PROGRESS",
+      ],
+    };
+
+    let filter = { status: activeStatuses };
+    if (employee.role === "CARPENTER") {
+      filter = { ...filter, assignedCarpenter: employee._id };
+    } else if (employee.role === "WAREHOUSE") {
+      filter = {
+        ...filter,
+        $or: [{ warehouseHandledBy: employee._id }, { warehouseSeenBy: employee._id }],
+      };
+    } else if (employee.role === "SALES") {
+      filter = {
+        ...filter,
+        isPaid: false,
+      };
+    } else {
+      return res.json([]);
+    }
+
+    const orders = await Order.find(filter)
+      .select("customer status orderDate estimatedDeliveryDate assignedCarpenter")
+      .sort({ estimatedDeliveryDate: 1, orderDate: -1 });
+
+    res.json(orders);
+  } catch (error) {
+    console.error("Error in getEmployeeActiveOrders:", error);
+    res.status(500).json({ message: "שגיאה בטעינת הזמנות פעילות של העובד" });
   }
 };
 

@@ -12,15 +12,69 @@ import {
  */
 const createOrderController = async (req, res) => {
   try {
+    const normalizePhone = (value = "") => String(value || "").replace(/[^\d]/g, "").replace(/^972/, "0");
+    const isValidPhone = (value = "") => /^0\d{8,9}$/.test(normalizePhone(value));
+    const isValidEmail = (value = "") => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(String(value || "").trim());
+    const isValidIsraeliId = (value = "") => {
+      const digits = String(value || "").replace(/[^\d]/g, "").padStart(9, "0");
+      if (!/^\d{9}$/.test(digits)) return false;
+      const check = digits
+        .split("")
+        .map(Number)
+        .reduce((sum, d, i) => {
+          const x = d * ((i % 2) + 1);
+          return sum + (x > 9 ? x - 9 : x);
+        }, 0);
+      return check % 10 === 0;
+    };
+
+    const customerName = String(req.body.customerName || "").trim();
+    const customerPhone1 = normalizePhone(req.body.customerPhone1);
+    const customerPhone2 = normalizePhone(req.body.customerPhone2);
+    const customerIdNumber = String(req.body.customerIdNumber || "").replace(/[^\d]/g, "");
+    const customerEmail = String(req.body.customerEmail || "").trim();
+    const deliveryAddress = String(req.body.deliveryAddress || "").trim();
+    const invoiceName = String(req.body.invoiceName || "").trim();
+
+    if (!customerName || customerName.length < 2) {
+      return res.status(400).json({ message: "שם לקוח לא תקין" });
+    }
+    if (!isValidPhone(customerPhone1)) {
+      return res.status(400).json({ message: "טלפון ראשי לא תקין" });
+    }
+    if (customerPhone2 && !isValidPhone(customerPhone2)) {
+      return res.status(400).json({ message: "טלפון נוסף לא תקין" });
+    }
+    if (!isValidIsraeliId(customerIdNumber)) {
+      return res.status(400).json({ message: "תעודת זהות לא תקינה" });
+    }
+    if (!isValidEmail(customerEmail)) {
+      return res.status(400).json({ message: "כתובת דוא״ל לא תקינה" });
+    }
+    if (!deliveryAddress || deliveryAddress.length < 5) {
+      return res.status(400).json({ message: "כתובת משלוח לא תקינה" });
+    }
+    if (!invoiceName || invoiceName.length < 2) {
+      return res.status(400).json({ message: "שם לחשבונית לא תקין" });
+    }
+    if (!Array.isArray(req.body.items) || req.body.items.length === 0) {
+      return res.status(400).json({ message: "חובה להוסיף לפחות פריט אחד להזמנה" });
+    }
+
     const orderData = {
       customer: {
-        name: req.body.customerName,
-        phone1: req.body.customerPhone1,
-        phone2: req.body.customerPhone2,
-        deliveryAddress: req.body.deliveryAddress,
-        invoiceName: req.body.invoiceName,
+        name: customerName,
+        phone1: customerPhone1,
+        phone2: customerPhone2,
+        idNumber: customerIdNumber,
+        email: customerEmail,
+        deliveryAddress,
+        invoiceName,
       },
-      items: req.body.items
+      items: req.body.items,
+      orderDate: req.body.orderDate,
+      estimatedDeliveryDate: req.body.estimatedDeliveryDate,
+      status: req.body.status,
     };
 
     const newOrder = await createOrder(orderData);
@@ -28,7 +82,12 @@ const createOrderController = async (req, res) => {
 
   } catch (error) {
     console.error("Error creating order:", error);
-    res.status(500).json({ message: error.message });
+    const msg = error?.message || "Server error";
+    const badRequest =
+      /אין פריטים|פריט חסר|not available|Quantity must|דורש בחירת|לא חוקית|Base product|Product .* not available/i.test(
+        msg
+      );
+    res.status(badRequest ? 400 : 500).json({ message: msg });
   }
 };
 

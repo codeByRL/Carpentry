@@ -4,6 +4,7 @@ import Order from "../models/Order.js";
 import CatalogProduct from "../models/CatalogProduct.js";
 import BaseProduct from "../models/BaseProduct.js";
 import User from "../models/User.js";
+import { checkMaterialsAvailability } from "./warehouseService.js";
 
 /**
  * חישוב תאריך אספקה משוער
@@ -35,9 +36,6 @@ export const calculateEstimatedDeliveryDate = (workloadHours) => {
  * }
  */
 export const createOrder = async (orderData) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
-
   try {
     if (!orderData || !Array.isArray(orderData.items) || orderData.items.length === 0) {
       throw new Error("אין פריטים להזמנה");
@@ -52,7 +50,7 @@ export const createOrder = async (orderData) => {
       const productId = item.catalogProductId || item.catalogProduct || item.productId || item.product;
       if (!productId) throw new Error("פריט חסר מזהה מוצר");
 
-      const product = await CatalogProduct.findById(productId).populate("baseProducts.product").session(session);
+      const product = await CatalogProduct.findById(productId).populate("baseProducts.product");
       if (!product || product.status !== "ACTIVE") {
         throw new Error(`Product ${productId} not available`);
       }
@@ -69,9 +67,9 @@ export const createOrder = async (orderData) => {
         let mat = null;
         const matId = typeof woodSel === 'string' ? woodSel : (woodSel.materialId || woodSel._id);
         if (matId) {
-          mat = await BaseProduct.findById(matId).session(session);
+          mat = await BaseProduct.findById(matId);
         } else if (woodSel.code) {
-          mat = await BaseProduct.findOne({ isMaterial: true, materialType: 'wood', code: woodSel.code }).session(session);
+          mat = await BaseProduct.findOne({ isMaterial: true, materialType: 'wood', code: woodSel.code });
         }
         if (!mat || !mat.isMaterial || mat.materialType !== 'wood') {
           throw new Error(`אפשרות עץ לא חוקית עבור "${product.name}"`);
@@ -90,9 +88,9 @@ export const createOrder = async (orderData) => {
         let mat2 = null;
         const mat2Id = typeof fabSel === 'string' ? fabSel : (fabSel.materialId || fabSel._id);
         if (mat2Id) {
-          mat2 = await BaseProduct.findById(mat2Id).session(session);
+          mat2 = await BaseProduct.findById(mat2Id);
         } else if (fabSel.code) {
-          mat2 = await BaseProduct.findOne({ isMaterial: true, materialType: 'fabric', code: fabSel.code }).session(session);
+          mat2 = await BaseProduct.findOne({ isMaterial: true, materialType: 'fabric', code: fabSel.code });
         }
         if (!mat2 || !mat2.isMaterial || mat2.materialType !== 'fabric') {
           throw new Error(`אפשרות בד לא חוקית עבור "${product.name}"`);
@@ -133,7 +131,7 @@ export const createOrder = async (orderData) => {
     const requiredMaterials = [];
     for (const [bpId, qty] of requiredMaterialsMap.entries()) {
       requiredMaterials.push({
-        baseProduct: bpId,
+        product: bpId,
         quantity: qty,
         isPicked: false
       });
@@ -149,28 +147,30 @@ export const createOrder = async (orderData) => {
       requiredMaterials,
       totalPrice: totalBasePrice,
       priceWithVAT,
-      orderDate: new Date(),
-      status: "ORDERED"
+      orderDate: orderData.orderDate ? new Date(orderData.orderDate) : new Date(),
+      estimatedDeliveryDate: orderData.estimatedDeliveryDate ? new Date(orderData.estimatedDeliveryDate) : undefined,
+      status: orderData.status || "ORDERED"
     });
 
     // עדכון reservedQuantity עבור כל חומר נדרש
+    // משריינים רק מהזמין בפועל כדי לא לרדת לזמינות שלילית.
     for (const mat of requiredMaterials) {
-      const baseProduct = await BaseProduct.findById(mat.baseProduct).session(session);
+      const baseProduct = await BaseProduct.findById(mat.product);
       if (!baseProduct) {
-        throw new Error(`Base product ${mat.baseProduct} not found`);
+        throw new Error(`Base product ${mat.product} not found`);
       }
-      baseProduct.reservedQuantity = (baseProduct.reservedQuantity || 0) + (mat.quantity || 0);
-      await baseProduct.save({ session });
+      const currentQty = Math.max(Number(baseProduct.quantity || 0), 0);
+      const currentReserved = Math.max(Number(baseProduct.reservedQuantity || 0), 0);
+      const availableToReserve = Math.max(currentQty - currentReserved, 0);
+      const reserveNow = Math.min(Number(mat.quantity || 0), availableToReserve);
+      baseProduct.reservedQuantity = currentReserved + reserveNow;
+      await baseProduct.save();
     }
 
-    await orderDoc.save({ session });
-    await session.commitTransaction();
+    await orderDoc.save();
     return orderDoc;
   } catch (error) {
-    await session.abortTransaction();
     throw error;
-  } finally {
-    session.endSession();
   }
 };
 
@@ -179,21 +179,18 @@ export const createOrder = async (orderData) => {
  * (מיזגתי את הגרסה הקיימת שלך לשימוש באותו שירות)
  */
 export const assignCarpenterToOrder = async (orderId, carpenterId) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
-
   try {
-    const order = await Order.findById(orderId).session(session);
+    const order = await Order.findById(orderId);
     if (!order) throw new Error("Order not found");
     if (order.status !== "ORDERED") throw new Error("Order already processed");
 
-    const carpenter = await User.findById(carpenterId).session(session);
+    const carpenter = await User.findById(carpenterId);
     if (!carpenter || carpenter.role !== "CARPENTER") throw new Error("Invalid carpenter");
 
     // חישוב שעות עבודה
     let totalWorkHours = 0;
     for (const item of order.items) {
-      const product = await CatalogProduct.findById(item.catalogProduct).session(session);
+      const product = await CatalogProduct.findById(item.catalogProduct);
       if (product) totalWorkHours += (product.estimatedWorkTime || 0) * item.quantity;
     }
 
@@ -203,22 +200,26 @@ export const assignCarpenterToOrder = async (orderId, carpenterId) => {
 
     order.assignedCarpenter = carpenterId;
     order.estimatedDeliveryDate = estimatedDeliveryDate;
-    order.status = "WAITING_FOR_WAREHOUSE";
-    await order.save({ session });
+    await order.save();
+
+    const classified = await Order.findById(orderId).populate("requiredMaterials.product");
+    const { availableItems, unavailableItems } = await checkMaterialsAvailability(
+      classified.requiredMaterials
+    );
+    classified.availableMaterials = availableItems;
+    classified.unavailableMaterials = unavailableItems;
+    classified.status =
+      unavailableItems.length > 0 ? "WAITING_FOR_SUPPLY" : "WAITING_FOR_PICKING";
+    await classified.save();
 
     await User.findByIdAndUpdate(
       carpenterId,
-      { $inc: { currentWorkloadHours: totalWorkHours, activeOrdersCount: 1 } },
-      { session }
+      { $inc: { currentWorkloadHours: totalWorkHours, activeOrdersCount: 1 } }
     );
 
-    await session.commitTransaction();
-    return order;
+    return classified;
   } catch (error) {
-    await session.abortTransaction();
     throw error;
-  } finally {
-    session.endSession();
   }
 };
 
@@ -250,8 +251,8 @@ export const assignBestCarpenterToOrder = async (orderId) => {
 export const getOrderById = async (orderId) => {
   const order = await Order.findById(orderId)
     .populate("items.catalogProduct")
-    .populate("assignedCarpenter", "fullName email")
-    .populate("requiredMaterials.baseProduct");
+    .populate("assignedCarpenter", "fullName email address phone")
+    .populate("requiredMaterials.product");
 
   if (!order) throw new Error("Order not found");
   return order;
@@ -263,7 +264,10 @@ export const getOrderById = async (orderId) => {
 export const getAllOrders = async (filters = {}) => {
   const orders = await Order.find(filters)
     .populate("items.catalogProduct", "name")
-    .populate("assignedCarpenter", "fullName")
+    .populate("assignedCarpenter", "fullName address phone")
+    .populate("requiredMaterials.product", "name code unit")
+    .populate("availableMaterials.product", "name code unit")
+    .populate("unavailableMaterials.product", "name code unit")
     .sort({ orderDate: -1 });
 
   return orders;

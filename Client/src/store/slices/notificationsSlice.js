@@ -52,7 +52,8 @@ const notificationsSlice = createSlice({
         state.loading = false;
         state.notifications = action.payload;
         // וודא שמשתמשים במאפיין שהשרת מחזיר עבור סטטוס קריאה (isRead)
-        state.unreadCount = action.payload.filter(n => !n.isRead).length; 
+        // לא לספור התראות צ'אט כאן — הן נספרות מנתוני השיחות (activeChatPartners)
+        state.unreadCount = action.payload.filter(n => !n.isRead && n.type !== 'CHAT').length; 
       })
       .addCase(fetchNotifications.rejected, (state, action) => {
         state.loading = false;
@@ -66,7 +67,7 @@ const notificationsSlice = createSlice({
           state.notifications[idx] = updatedNotification;
         }
         // עדכון ספירה לאחר שינוי
-        state.unreadCount = state.notifications.filter(n => !n.isRead).length;
+        state.unreadCount = state.notifications.filter(n => !n.isRead && n.type !== 'CHAT').length;
       })
       .addCase(markNotificationRead.rejected, (state, action) => {
         state.error = action.payload; // שגיאת סימון כנקרא

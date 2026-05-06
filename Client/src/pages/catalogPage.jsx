@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
+import API from '../services/api';
 import {
   Box, Typography, Grid, Paper, Button, CircularProgress,
   Dialog, DialogTitle, DialogContent, DialogActions,
-  TextField, Chip, IconButton, Avatar, Tooltip,
+  TextField, Chip, IconButton, Tooltip,
   Divider, Alert, Switch, FormControlLabel
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
@@ -17,7 +18,6 @@ import CloseIcon from '@mui/icons-material/Close';
 import {
   fetchActiveCatalog,
   fetchManagerCatalog,
-  fetchCatalogByStatus,
   fetchCarpenters,
   createCatalogProduct,
   updateCatalogProduct,
@@ -26,6 +26,7 @@ import {
   assignCarpenterForCharacterization,
   generateAIImage,
   clearGeneratedImage,
+  clearCatalogSubmitError,
 } from '../store/slices/catalogSlice';
 
 const STATUS_LABEL = {
@@ -56,8 +57,6 @@ const CatalogPage = () => {
   const { products, carpenters, generatedImageUrl, loading, submitLoading, imageLoading, error, submitError } =
     useSelector(s => s.catalog);
 
-  const [inProcess, setInProcess]         = useState([]);
-  const [showProcess, setShowProcess]     = useState(false);
   const [detailProduct, setDetailProduct] = useState(null);
   const [editProduct, setEditProduct]     = useState(null);
   const [showNewForm, setShowNewForm]     = useState(false);
@@ -68,6 +67,20 @@ const CatalogPage = () => {
   const [imagePreview, setImagePreview]   = useState(null);
   const [imageFile, setImageFile]         = useState(null);
   const [managerFilter, setManagerFilter] = useState('ALL');
+  const [showFabricForm, setShowFabricForm] = useState(false);
+  const [newFabricForm, setNewFabricForm] = useState({
+    name: '',
+    supplier: '',
+    description: '',
+    priceDelta: '',
+    quantity: '1',
+  });
+  const [newFabricImageFile, setNewFabricImageFile] = useState(null);
+  const [fabricCreateResult, setFabricCreateResult] = useState('');
+  const [fabricsDialogOpen, setFabricsDialogOpen] = useState(false);
+  const [fabricsLoading, setFabricsLoading] = useState(false);
+  const [fabricProducts, setFabricProducts] = useState([]);
+  const [fabricsInStockCount, setFabricsInStockCount] = useState(0);
 
   const [newForm, setNewForm] = useState({
     name: '', description: '', carpenterId: '',
@@ -80,24 +93,25 @@ const CatalogPage = () => {
     if (isManager) {
       dispatch(fetchManagerCatalog());
       dispatch(fetchCarpenters());
+      API.get('/base-products?isMaterial=true&type=fabric&limit=200')
+        .then((res) => {
+          const inStock = (res.data || []).filter((f) => Number(f.quantity || 0) > 0);
+          setFabricsInStockCount(inStock.length);
+        })
+        .catch(() => setFabricsInStockCount(0));
     } else {
       dispatch(fetchActiveCatalog());
     }
   }, [dispatch, isManager]);
 
   useEffect(() => {
-    if (generatedImageUrl) setImagePreview(generatedImageUrl);
+    if (generatedImageUrl) {
+      const normalizedUrl = generatedImageUrl.startsWith('http')
+        ? generatedImageUrl
+        : `${BASE_URL}${generatedImageUrl}`;
+      setImagePreview(normalizedUrl);
+    }
   }, [generatedImageUrl]);
-
-  const handleShowProcess = () => {
-    dispatch(fetchCatalogByStatus('PENDING_CHARACTERIZATION')).then(r => {
-      const pending = r.payload || [];
-      dispatch(fetchCatalogByStatus('WAITING_ADMIN_APPROVAL')).then(r2 => {
-        setInProcess([...pending, ...(r2.payload || [])]);
-        setShowProcess(true);
-      });
-    });
-  };
 
   const handleDelete = () => {
     dispatch(deleteCatalogProduct(deleteConfirm._id));
@@ -128,6 +142,7 @@ const CatalogPage = () => {
 
   const handleGenerateAI = () => {
     if (!aiPrompt.trim()) return;
+    dispatch(clearCatalogSubmitError());
     dispatch(generateAIImage(aiPrompt));
     setImageFile(null);
   };
@@ -184,6 +199,57 @@ const CatalogPage = () => {
     });
   };
 
+  const handleCreateFabric = async () => {
+    if (!newFabricForm.name.trim()) return;
+    const fd = new FormData();
+    fd.append('name', newFabricForm.name.trim());
+    fd.append('unit', 'מטר');
+    fd.append('supplier', newFabricForm.supplier.trim());
+    fd.append('description', newFabricForm.description.trim());
+    fd.append('priceDelta', Number(newFabricForm.priceDelta || 0));
+    fd.append('isMaterial', 'true');
+    fd.append('materialType', 'fabric');
+    fd.append('quantity', Number(newFabricForm.quantity || 0));
+    fd.append('minStock', 1);
+    fd.append('reorderQuantity', 10);
+    if (newFabricImageFile) {
+      fd.append('image', newFabricImageFile);
+    }
+    try {
+      const res = await API.post('/warehouse/base-products', fd, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      const created = res.data;
+      setFabricCreateResult(`בד נוסף בהצלחה. מספר הדגם: ${created.code}`);
+      setShowFabricForm(false);
+      setNewFabricForm({ name: '', supplier: '', description: '', priceDelta: '', quantity: '1' });
+      setNewFabricImageFile(null);
+      API.get('/base-products?isMaterial=true&type=fabric&limit=200')
+        .then((countRes) => {
+          const inStock = (countRes.data || []).filter((f) => Number(f.quantity || 0) > 0);
+          setFabricsInStockCount(inStock.length);
+        })
+        .catch(() => {});
+    } catch (e) {
+      setFabricCreateResult(e.response?.data?.error || 'שגיאה בהוספת בד חדש');
+    }
+  };
+
+  const handleShowFabricsInStock = async () => {
+    try {
+      setFabricsLoading(true);
+      const res = await API.get('/base-products?isMaterial=true&type=fabric&limit=200');
+      const inStock = (res.data || []).filter((f) => Number(f.quantity || 0) > 0);
+      setFabricProducts(inStock);
+      setFabricsDialogOpen(true);
+    } catch {
+      setFabricProducts([]);
+      setFabricsDialogOpen(true);
+    } finally {
+      setFabricsLoading(false);
+    }
+  };
+
   if (loading) return (
     <Box sx={{ display: 'flex', justifyContent: 'center', mt: 8 }}>
       <CircularProgress sx={{ color: WOOD_COLOR }} />
@@ -206,40 +272,55 @@ const CatalogPage = () => {
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
         <Typography sx={{ fontSize: 21, fontWeight: 700, color: DARK }}>קטלוג מוצרים</Typography>
         {isManager && (
-          <Box sx={{ display: 'flex', gap: 1 }}>
-            <Button size="small" variant={managerFilter === 'ALL' ? 'contained' : 'outlined'}
-              sx={{ fontSize: 11.5, borderRadius: 2 }}
-              onClick={() => setManagerFilter('ALL')}>
-              הכל ({products.length})
-            </Button>
-            <Button size="small" variant={managerFilter === 'PENDING_CHARACTERIZATION' ? 'contained' : 'outlined'}
-              sx={{ fontSize: 11.5, borderRadius: 2 }}
-              onClick={() => setManagerFilter('PENDING_CHARACTERIZATION')}>
-              מוצרים באפיון ({statusCounts.PENDING_CHARACTERIZATION})
-            </Button>
-            <Button size="small" variant={managerFilter === 'WAITING_ADMIN_APPROVAL' ? 'contained' : 'outlined'}
-              sx={{ fontSize: 11.5, borderRadius: 2 }}
-              onClick={() => setManagerFilter('WAITING_ADMIN_APPROVAL')}>
-              ממתינים לאישור ({statusCounts.WAITING_ADMIN_APPROVAL})
-            </Button>
-            <Button size="small" variant={managerFilter === 'ACTIVE' ? 'contained' : 'outlined'}
-              sx={{ fontSize: 11.5, borderRadius: 2 }}
-              onClick={() => setManagerFilter('ACTIVE')}>
-              פעילים ({statusCounts.ACTIVE})
-            </Button>
-            <Button size="small" variant="outlined"
-              sx={{ borderColor: BORDER, color: '#A0522D', fontSize: 12, borderRadius: 2 }}
-              onClick={handleShowProcess}>
-              מוצרים באפיון
-            </Button>
-            <Button size="small" variant="contained" startIcon={<AddIcon />}
-              sx={{ bgcolor: WOOD_COLOR, fontSize: 12, borderRadius: 2, '&:hover': { bgcolor: '#A0522D' } }}
-              onClick={() => setShowNewForm(true)}>
-              מוצר חדש
-            </Button>
+          <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 1, width: '100%' }}>
+            <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+              <Button size="small" variant={managerFilter === 'ALL' ? 'contained' : 'outlined'}
+                sx={{ fontSize: 11.5, borderRadius: 2 }}
+                onClick={() => setManagerFilter('ALL')}>
+                הכל ({products.length})
+              </Button>
+              <Button size="small" variant={managerFilter === 'PENDING_CHARACTERIZATION' ? 'contained' : 'outlined'}
+                sx={{ fontSize: 11.5, borderRadius: 2 }}
+                onClick={() => setManagerFilter('PENDING_CHARACTERIZATION')}>
+                מוצרים באפיון ({statusCounts.PENDING_CHARACTERIZATION})
+              </Button>
+              <Button size="small" variant={managerFilter === 'WAITING_ADMIN_APPROVAL' ? 'contained' : 'outlined'}
+                sx={{ fontSize: 11.5, borderRadius: 2 }}
+                onClick={() => setManagerFilter('WAITING_ADMIN_APPROVAL')}>
+                ממתינים לאישור ({statusCounts.WAITING_ADMIN_APPROVAL})
+              </Button>
+              <Button size="small" variant={managerFilter === 'ACTIVE' ? 'contained' : 'outlined'}
+                sx={{ fontSize: 11.5, borderRadius: 2 }}
+                onClick={() => setManagerFilter('ACTIVE')}>
+                פעילים ({statusCounts.ACTIVE})
+              </Button>
+              <Button size="small" variant="contained" startIcon={<AddIcon />}
+                sx={{ minWidth: 132, bgcolor: WOOD_COLOR, fontSize: 12, borderRadius: 2, '&:hover': { bgcolor: '#A0522D' } }}
+                onClick={() => setShowNewForm(true)}>
+                מוצר חדש
+              </Button>
+            </Box>
+
+            <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+              <Button size="small" variant="outlined"
+                sx={{ fontSize: 11.5, borderRadius: 2, borderColor: BORDER, color: '#6D4C41' }}
+                onClick={handleShowFabricsInStock}>
+                בדי ריפוד במלאי ({fabricsInStockCount})
+              </Button>
+              <Button size="small" variant="contained" startIcon={<AddIcon />}
+                sx={{ minWidth: 132, bgcolor: '#6D4C41', fontSize: 12, borderRadius: 2, '&:hover': { bgcolor: '#4E342E' } }}
+                onClick={() => setShowFabricForm(true)}>
+                הוסף בד חדש
+              </Button>
+            </Box>
           </Box>
         )}
       </Box>
+      {fabricCreateResult && (
+        <Alert severity={fabricCreateResult.includes('בהצלחה') ? 'success' : 'error'} sx={{ mb: 2 }}>
+          {fabricCreateResult}
+        </Alert>
+      )}
 
       {error && (
         <Alert severity={error.includes('נטפרי') ? "warning" : "error"} sx={{ mb: 2, direction: 'rtl' }}>
@@ -253,7 +334,15 @@ const CatalogPage = () => {
       )}
 
       {visibleProducts.length === 0 ? (
-        <Alert severity="info" sx={{ borderRadius: 2 }}>אין מוצרים פעילים בקטלוג</Alert>
+        <Alert severity="info" sx={{ borderRadius: 2 }}>
+          {isManager && managerFilter === 'PENDING_CHARACTERIZATION'
+            ? 'אין מוצרים לאפיון'
+            : isManager && managerFilter === 'WAITING_ADMIN_APPROVAL'
+              ? 'אין מוצרים הממתינים לאישור'
+              : isManager && managerFilter === 'ACTIVE'
+                ? 'אין מוצרים פעילים'
+                : 'אין מוצרים להצגה'}
+        </Alert>
       ) : (
         <Grid container spacing={2}>
           {visibleProducts.map(p => (
@@ -371,46 +460,6 @@ const CatalogPage = () => {
         </>}
       </Dialog>
 
-      {/* דיאלוג מוצרים באפיון */}
-      <Dialog open={isManager && showProcess} onClose={() => setShowProcess(false)} maxWidth="md" fullWidth
-        PaperProps={{ sx: { borderRadius: 3, direction: 'rtl' } }}>
-        <DialogTitle sx={{ fontWeight: 700, color: DARK, display: 'flex', justifyContent: 'space-between' }}>
-          מוצרים בתהליך אפיון
-          <IconButton size="small" onClick={() => setShowProcess(false)}><CloseIcon /></IconButton>
-        </DialogTitle>
-        <DialogContent dividers>
-          {inProcess.length === 0
-            ? <Alert severity="info">אין מוצרים באפיון כרגע</Alert>
-            : inProcess.map(p => (
-              <Box key={p._id} sx={{
-                display: 'flex', gap: 2, alignItems: 'center',
-                py: 1.5, borderBottom: `1px solid ${BORDER}`,
-                '&:last-child': { borderBottom: 'none' },
-              }}>
-                {/* ✅ תוקן: BASE_URL */}
-                <Avatar variant="rounded"
-                  src={p.image ? `${BASE_URL}${p.image}` : undefined}
-                  sx={{ width: 56, height: 56, bgcolor: LIGHT_BG, color: '#C4A882' }}>
-                  {!p.image && '🪵'}
-                </Avatar>
-                <Box sx={{ flex: 1 }}>
-                  <Typography sx={{ fontWeight: 600, fontSize: 13, color: DARK }}>{p.name}</Typography>
-                  <Typography sx={{ fontSize: 11.5, color: '#A1887F' }}>{p.description}</Typography>
-                  {p.assignedCarpenter && (
-                    <Typography sx={{ fontSize: 11, color: '#6D4C41', mt: 0.3 }}>
-                      🪚 {p.assignedCarpenter.fullName || p.assignedCarpenter.username}
-                    </Typography>
-                  )}
-                </Box>
-                <Chip label={STATUS_LABEL[p.status]?.label || p.status} size="small"
-                  sx={{ bgcolor: STATUS_LABEL[p.status]?.bg, color: STATUS_LABEL[p.status]?.color,
-                    fontWeight: 600, fontSize: 11 }} />
-              </Box>
-            ))
-          }
-        </DialogContent>
-      </Dialog>
-
       {/* דיאלוג מוצר חדש */}
       <Dialog open={isManager && showNewForm} onClose={() => setShowNewForm(false)} maxWidth="sm" fullWidth
         PaperProps={{ sx: { borderRadius: 3, direction: 'rtl' } }}>
@@ -444,6 +493,11 @@ const CatalogPage = () => {
             {submitError && submitError.includes && submitError.includes('נטפרי') && (
               <Alert severity="warning" sx={{ mb: 1, fontSize: 11 }}>
                 יצירת תמונה עם AI לא זמינה על מחשב זה בגלל סינון רשת.
+              </Alert>
+            )}
+            {submitError && (!submitError.includes || !submitError.includes('נטפרי')) && (
+              <Alert severity="error" sx={{ mb: 1, fontSize: 11 }}>
+                {typeof submitError === 'string' ? submitError : 'שגיאה ביצירת תמונה עם AI'}
               </Alert>
             )}
             {imagePreview && (
@@ -650,6 +704,117 @@ const CatalogPage = () => {
           <Button variant="contained" disabled={submitLoading || !approvePrice} onClick={handleApproveSubmit}
             sx={{ bgcolor: '#2E7D32', fontSize: 12, borderRadius: 2, '&:hover': { bgcolor: '#1B5E20' } }}>
             {submitLoading ? <CircularProgress size={16} sx={{ color: 'white' }} /> : 'אשר מוצר'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={isManager && showFabricForm} onClose={() => setShowFabricForm(false)} maxWidth="sm" fullWidth
+        PaperProps={{ sx: { borderRadius: 3, direction: 'rtl' } }}>
+        <DialogTitle sx={{ fontWeight: 700, color: DARK }}>הוספת בד ריפוד חדש</DialogTitle>
+        <DialogContent dividers sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+          <TextField
+            label="שם הבד *"
+            size="small"
+            fullWidth
+            value={newFabricForm.name}
+            onChange={(e) => setNewFabricForm((f) => ({ ...f, name: e.target.value }))}
+          />
+          <TextField
+            label="שם ספק"
+            size="small"
+            fullWidth
+            value={newFabricForm.supplier}
+            onChange={(e) => setNewFabricForm((f) => ({ ...f, supplier: e.target.value }))}
+          />
+          <TextField
+            label="תוספת מחיר (₪)"
+            size="small"
+            fullWidth
+            type="number"
+            value={newFabricForm.priceDelta}
+            onChange={(e) => setNewFabricForm((f) => ({ ...f, priceDelta: e.target.value }))}
+          />
+          <TextField
+            label="כמות התחלתית במלאי"
+            size="small"
+            fullWidth
+            type="number"
+            inputProps={{ min: 0 }}
+            value={newFabricForm.quantity}
+            onChange={(e) => setNewFabricForm((f) => ({ ...f, quantity: e.target.value }))}
+          />
+          <TextField
+            label="תיאור"
+            size="small"
+            fullWidth
+            multiline
+            rows={2}
+            value={newFabricForm.description}
+            onChange={(e) => setNewFabricForm((f) => ({ ...f, description: e.target.value }))}
+          />
+          <Button component="label" size="small" variant="outlined" startIcon={<UploadIcon />}
+            sx={{ width: 'fit-content', fontSize: 11.5, borderRadius: 2 }}>
+            {newFabricImageFile ? `תמונה נבחרה: ${newFabricImageFile.name}` : 'העלה תמונה לבד'}
+            <input
+              type="file"
+              accept="image/*"
+              hidden
+              onChange={(e) => setNewFabricImageFile(e.target.files?.[0] || null)}
+            />
+          </Button>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={() => setShowFabricForm(false)} sx={{ color: '#A1887F', fontSize: 12 }}>ביטול</Button>
+          <Button
+            variant="contained"
+            disabled={!newFabricForm.name.trim()}
+            onClick={handleCreateFabric}
+            sx={{ bgcolor: WOOD_COLOR, fontSize: 12, borderRadius: 2, '&:hover': { bgcolor: '#A0522D' } }}
+          >
+            שמור בד חדש
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={fabricsDialogOpen} onClose={() => setFabricsDialogOpen(false)} maxWidth="md" fullWidth
+        PaperProps={{ sx: { borderRadius: 3, direction: 'rtl' } }}>
+        <DialogTitle sx={{ fontWeight: 700, color: DARK }}>בדי ריפוד במלאי</DialogTitle>
+        <DialogContent dividers>
+          {fabricsLoading ? (
+            <Box sx={{ display: 'flex', justifyContent: 'center', py: 3 }}>
+              <CircularProgress size={22} sx={{ color: WOOD_COLOR }} />
+            </Box>
+          ) : fabricProducts.length === 0 ? (
+            <Alert severity="info">אין בדי ריפוד זמינים במלאי כרגע</Alert>
+          ) : (
+            <Grid container spacing={1.5}>
+              {fabricProducts.map((f) => (
+                <Grid size={{ xs: 12, sm: 6, md: 4 }} key={f._id}>
+                  <Paper sx={{ p: 1.2, borderRadius: 2, border: `1px solid ${BORDER}`, boxShadow: 'none' }}>
+                    <Box sx={{ height: 120, borderRadius: 1.5, overflow: 'hidden', bgcolor: LIGHT_BG, mb: 1 }}>
+                      {f.image ? (
+                        <img src={`${BASE_URL}${f.image}`} alt={f.name}
+                          style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                      ) : (
+                        <Box sx={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                          <Typography sx={{ fontSize: 11, color: '#A1887F' }}>אין תמונה</Typography>
+                        </Box>
+                      )}
+                    </Box>
+                    <Typography sx={{ fontSize: 13, fontWeight: 700, color: DARK }}>{f.name}</Typography>
+                    <Typography sx={{ fontSize: 11.5, color: '#8D6E63' }}>קוד: {f.code || '—'}</Typography>
+                    <Typography sx={{ fontSize: 11.5, color: '#2E7D32', fontWeight: 600 }}>
+                      במלאי: {f.quantity || 0}
+                    </Typography>
+                  </Paper>
+                </Grid>
+              ))}
+            </Grid>
+          )}
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={() => setFabricsDialogOpen(false)} sx={{ color: '#A1887F', fontSize: 12 }}>
+            סגור
           </Button>
         </DialogActions>
       </Dialog>
