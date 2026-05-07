@@ -95,8 +95,17 @@ const ManagerNewOrders = () => {
       {newOrders.length === 0 ? (
         <Alert severity="success">אין הזמנות חדשות ממתינות לשיוך 🎉</Alert>
       ) : (
-        <TableContainer component={Paper} sx={{ borderRadius: 3, boxShadow: 2 }}>
-          <Table>
+        <TableContainer
+          component={Paper}
+          sx={{
+            borderRadius: 3,
+            boxShadow: 2,
+            overflowX: 'auto',
+            WebkitOverflowScrolling: 'touch',
+            maxWidth: '100%',
+          }}
+        >
+          <Table size="small" sx={{ minWidth: 800 }}>
             <TableHead sx={{ bgcolor: '#f5f5f5' }}>
               <TableRow>
                 <TableCell sx={{ fontWeight: 'bold' }}>לקוח</TableCell>

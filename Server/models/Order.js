@@ -80,6 +80,10 @@ const OrderSchema = new Schema({
   priceWithVAT: Number,
   orderDate: { type: Date, default: Date.now },
   estimatedDeliveryDate: Date,
+  deliveryClaimedBy: { type: Schema.Types.ObjectId, ref: "User", default: null },
+  deliveryClaimedAt: { type: Date, default: null },
+  /** המוביל סיים עצירת הובלה לנגר; ממתין לאישור קבלה מהנגר לפני IN_PROGRESS */
+  driverMarkedDeliveredToCarpenterAt: { type: Date, default: null },
   assignedCarpenter: { type: Schema.Types.ObjectId, ref: "User" },
   receivedByCarpenter: { type: Boolean, default: false },
   carpenterPaused: { type: Boolean, default: false },

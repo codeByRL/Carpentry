@@ -37,7 +37,11 @@ export const pickMaterialAction = createAsyncThunk(
   'warehouse/pickMaterial',
   async ({ orderId, materialId, warehouseUserId }, { rejectWithValue }) => {
     try { return (await API.patch(`/warehouse/order/${orderId}/pick`, { materialId, warehouseUserId })).data; }
-    catch (err) { return rejectWithValue(err.response?.data?.message || 'שגיאה'); }
+    catch (err) {
+      return rejectWithValue(
+        err.response?.data?.error || err.response?.data?.message || 'שגיאה בסימון ליקוט'
+      );
+    }
   }
 );
 
@@ -128,12 +132,14 @@ const warehouseSlice = createSlice({
       .addCase(fetchOrdersWithNewProducts.fulfilled, (state, a) => { state.ordersWithNewProducts = a.payload; })
 
       .addCase(pickMaterialAction.fulfilled, (state, a) => {
-        const idx = state.orders.findIndex(o => o._id === a.payload._id);
+        const id = String(a.payload?._id ?? '');
+        const idx = state.orders.findIndex((o) => String(o._id) === id);
         if (idx !== -1) state.orders[idx] = a.payload;
       })
 
       .addCase(markReadyForShipping.fulfilled, (state, a) => {
-        const idx = state.orders.findIndex(o => o._id === a.payload._id);
+        const id = String(a.payload?._id ?? '');
+        const idx = state.orders.findIndex((o) => String(o._id) === id);
         if (idx !== -1) state.orders[idx] = a.payload;
       })
 

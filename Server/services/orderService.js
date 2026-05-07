@@ -241,9 +241,9 @@ export const getAllOrders = async (filters = {}) => {
   const orders = await Order.find(filters)
     .populate("items.catalogProduct", "name")
     .populate("assignedCarpenter", "fullName address phone")
-    .populate("requiredMaterials.product", "name code unit")
-    .populate("availableMaterials.product", "name code unit")
-    .populate("unavailableMaterials.product", "name code unit")
+    .populate("requiredMaterials.product", "name code unit isNew")
+    .populate("availableMaterials.product", "name code unit isNew")
+    .populate("unavailableMaterials.product", "name code unit isNew")
     .sort({ orderDate: -1 });
 
   return orders;

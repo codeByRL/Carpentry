@@ -4,6 +4,7 @@ import BaseProduct from "../models/BaseProduct.js";
 import User from "../models/User.js";
 import { getUserNotifications, markAsRead } from "../services/notificationService.js";
 import * as carpenterService from "../services/carpenterService.js";
+import { getOrderIdsPendingCarpenterStopsInActiveRuns } from "../services/deliveryService.js";
 
 /**
  * קבלת כל ההזמנות הפעילות של הנגר המחובר
@@ -21,6 +22,9 @@ export const getMyOrders = async (req, res) => {
     .populate("items.catalogProduct", "name image estimatedWorkTime")
     .sort({ estimatedDeliveryDate: 1 }); // ממוין לפי דחיפות
 
+    const orderIds = orders.map((o) => o._id);
+    const pendingCarpenterStopOrderIds = await getOrderIdsPendingCarpenterStopsInActiveRuns(orderIds);
+
     // מעבדים את הנתונים כדי שיהיה קל לקליינט להציג
     const formattedOrders = orders.map(order => ({
       orderId: order._id,
@@ -29,13 +33,21 @@ export const getMyOrders = async (req, res) => {
       status: order.status,
       orderDate: order.orderDate,
       estimatedDeliveryDate: order.estimatedDeliveryDate,
+      deliveryClaimedBy: order.deliveryClaimedBy || null,
+      driverMarkedDeliveredToCarpenterAt: order.driverMarkedDeliveredToCarpenterAt || null,
+      /** יש עצירת מוביל לנגר במסלול פעיל שעדיין לא הושלמה (מקור אמת מול שדות ההזמנה) */
+      inActiveDeliveryRunToCarpenter: pendingCarpenterStopOrderIds.has(String(order._id)),
       receivedByCarpenter: order.receivedByCarpenter,
       carpenterPaused: order.carpenterPaused,
       carpenterPauseReason: order.carpenterPauseReason,
       carpenterCompletedAt: order.carpenterCompletedAt,
       items: order.items.map(item => ({
         productName: item.catalogProduct.name,
-        productImage: item.catalogProduct.image,
+        productImage:
+          item.catalogProduct?.image ||
+          item.productSnapshot?.image ||
+          item.productSnapshot?.imageUrl ||
+          null,
         quantity: item.quantity,
         estimatedWorkTime: item.catalogProduct.estimatedWorkTime,
         // 🆕 כאן הנגר רואה את הקודים!
@@ -67,8 +79,15 @@ export const markReceived = async (req, res) => {
       return res.status(403).json({ message: "Not your order" });
     }
 
+    if (!order.driverMarkedDeliveredToCarpenterAt) {
+      return res.status(400).json({
+        message: "עוד לא הגיע אליך בפועל",
+      });
+    }
+
     order.receivedByCarpenter = true;
     order.status = "IN_PROGRESS";
+    order.driverMarkedDeliveredToCarpenterAt = null;
     await order.save();
 
     res.json({ message: "Order marked as received", order });

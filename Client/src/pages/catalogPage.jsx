@@ -287,11 +287,22 @@ const CatalogPage = () => {
   };
 
   return (
-    <Box sx={{ width: '100%' }}>
-
-      <Box sx={{ mb: 3 }}>
+    <Box sx={{ width: '100%', maxWidth: '100%', mx: 'auto', boxSizing: 'border-box' }}>
+      <Box
+        sx={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'flex-start',
+          flexWrap: 'wrap',
+          gap: 2,
+          mb: 2.5,
+        }}
+      >
+        <Typography sx={{ fontSize: 21, fontWeight: 700, color: DARK, flexShrink: 0 }}>
+          קטלוג מוצרים
+        </Typography>
         {isManager && (
-          <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 1, width: '100%' }}>
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, alignItems: 'flex-end', maxWidth: '100%' }}>
             <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
               <Button size="small" variant={managerFilter === 'ALL' ? 'contained' : 'outlined'}
                 sx={{ fontSize: 11.5, borderRadius: 2 }}
@@ -319,7 +330,6 @@ const CatalogPage = () => {
                 מוצר חדש
               </Button>
             </Box>
-
             <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
               <Button size="small" variant="outlined"
                 sx={{ fontSize: 11.5, borderRadius: 2, borderColor: BORDER, color: '#6D4C41' }}
@@ -334,20 +344,9 @@ const CatalogPage = () => {
             </Box>
           </Box>
         )}
-        <Typography
-          sx={{
-            fontSize: 21,
-            fontWeight: 700,
-            color: DARK,
-            textAlign: 'center',
-            whiteSpace: 'nowrap',
-            width: '100%',
-            mt: isManager ? 2 : 0,
-          }}
-        >
-          קטלוג מוצרים
-        </Typography>
-        <Box sx={{ mt: 1.5, display: 'flex', gap: 1, flexWrap: 'wrap', justifyContent: 'center' }}>
+      </Box>
+
+        <Box sx={{ mb: 2, display: 'flex', gap: 1, flexWrap: 'wrap', justifyContent: 'center' }}>
           <Button
             size="small"
             variant={categoryFilter === 'ALL' ? 'contained' : 'outlined'}
@@ -376,7 +375,6 @@ const CatalogPage = () => {
             אחר ({categoryCounts['אחר'] || 0})
           </Button>
         </Box>
-      </Box>
       {fabricCreateResult && (
         <Alert severity={fabricCreateResult.includes('בהצלחה') ? 'success' : 'error'} sx={{ mb: 2 }}>
           {fabricCreateResult}

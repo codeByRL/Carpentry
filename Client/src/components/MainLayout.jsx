@@ -85,7 +85,8 @@ const MainLayout = () => {
     { text: 'משלוחים', icon: <LocalShippingIcon />, path: '/driver/deliveries', roles: ['DRIVER'] },
     { text: 'קטלוג מוצרים', icon: <CategoryIcon />, path: '/catalog', roles: ['MANAGER', 'SALES'] },
     { text: 'קטלוג בדי ריפוד', icon: <TextureIcon />, path: '/sales/fabrics', roles: ['SALES'] },
-    { text: 'מלאי ומחסן', icon: <InventoryIcon />, path: '/warehouses', roles: ['MANAGER', 'WAREHOUSE'] },
+    { text: 'סטטוס מחסן', icon: <InventoryIcon />, path: '/warehouses', roles: ['MANAGER'] },
+    { text: 'מלאי ומחסן', icon: <InventoryIcon />, path: '/warehouses', roles: ['WAREHOUSE'] },
     { text: 'ניהול עובדים', icon: <PeopleIcon />, path: '/employees', roles: ['MANAGER'] },
     { text: "צ'אט", icon: <ChatIcon />, path: '/chat', roles: ['MANAGER', 'WAREHOUSE', 'CARPENTER', 'SALES', 'DRIVER'], isChatLink: true },
   ];
@@ -190,14 +191,27 @@ const MainLayout = () => {
           bgcolor: 'white', color: '#333', borderBottom: '1px solid #EEEEEE',
         }}
       >
-        <Toolbar sx={{ justifyContent: 'space-between', minHeight: '56px !important' }}>
-          <IconButton color="inherit" edge="start" onClick={handleDrawerToggle} sx={{ display: { sm: 'none' } }}>
+        <Toolbar sx={{ justifyContent: 'space-between', minHeight: '56px !important', gap: 1 }}>
+          <IconButton color="inherit" edge="start" onClick={handleDrawerToggle} sx={{ display: { sm: 'none' }, flexShrink: 0 }}>
             <MenuIcon />
           </IconButton>
-          <Typography sx={{ fontWeight: 600, fontSize: 15, color: '#5D4037' }}>
+          <Typography
+            sx={{
+              fontWeight: 600,
+              fontSize: { xs: 14, sm: 15 },
+              color: '#5D4037',
+              flex: 1,
+              textAlign: 'center',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              minWidth: 0,
+              px: 0.5,
+            }}
+          >
             {visibleItems.find(i => location.pathname.startsWith(i.path))?.text || 'WoodShop ERP'}
           </Typography>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexShrink: 0 }}>
             <ChatNotifications />
             <Tooltip title="התנתקות">
               <IconButton onClick={handleLogout} size="small" sx={{ color: '#BDBDBD', '&:hover': { color: '#EF5350' } }}>

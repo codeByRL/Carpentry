@@ -1,14 +1,13 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 import {
   Box, Typography, Grid, Paper, Button, CircularProgress,
-  Alert, LinearProgress
+  Alert, LinearProgress, Tab, Tabs,
 } from '@mui/material';
 import ShoppingCartIcon from '@mui/icons-material/ShoppingCart';
 import PeopleIcon from '@mui/icons-material/People';
 import InventoryIcon from '@mui/icons-material/Inventory';
-import NotificationsIcon from '@mui/icons-material/Notifications';
 import ChatIcon from '@mui/icons-material/Chat';
 
 import { fetchAllOrders } from '../store/slices/ordersSlice';
@@ -36,14 +35,15 @@ const STAT_ICONS  = [
   <ChatIcon sx={{ fontSize: 26 }} />,
 ];
 
-const CARD_COLORS = [
-  { bg: '#FBF0E9', border: '#E8C9B0', icon: '#D2691E', title: '#7B3F1A' },
-  { bg: '#F5EDE8', border: '#DDB89A', icon: '#A0522D', title: '#6B3520' },
-  { bg: '#EEF0E8', border: '#C8CBA8', icon: '#6B7A3A', title: '#4A5228' },
-];
+const C = { primary: '#D2691E', border: '#E8C9B0', dark: '#3E2723' };
+
+/** לשוניות תחת הכרטיס הגדול (כמו נגר / מחסן) */
+const MANAGER_MAIN_TAB_KEYS = ['ORDERS', 'ALERTS', 'CARPENTERS'];
+/** סנכרון ריבוע סטטיסטיקה → לשונית (אינדקס 2 = ממתינים לאישור → ניווט לקטלוג בלבד) */
+const STAT_INDEX_TO_TAB = ['ORDERS', 'CARPENTERS', null, 'ALERTS'];
 
 const SectionHeader = ({ emoji, title, btnLabel, onClick, titleColor = '#3E2723' }) => (
-  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2, flexWrap: 'wrap', gap: 1 }}>
     <Typography sx={{ fontWeight: 700, fontSize: 14, color: titleColor }}>
       {emoji} {title}
     </Typography>
@@ -58,6 +58,7 @@ const SectionHeader = ({ emoji, title, btnLabel, onClick, titleColor = '#3E2723'
 const Dashboard = () => {
   const dispatch = useDispatch();
   const navigate = useNavigate();
+  const [mainTab, setMainTab] = useState('ORDERS');
 
   const { user } = useSelector(s => s.auth);
   const { orders, loading: ordersLoading } = useSelector(s => s.orders);
@@ -92,25 +93,25 @@ const Dashboard = () => {
       title: 'הזמנות פעילות',
       value: activeOrders.length,
       sub: `${newOrders.length} חדשות`,
-      onClick: () => navigate('/manager/orders')
+      onClick: () => setMainTab('ORDERS'),
     },
     {
       title: 'נגרים',
       value: carpenters.length,
       sub: `${carpenters.filter(c => c.currentWorkloadHours > 0).length} בעבודה`,
-      onClick: () => navigate('/employees')
+      onClick: () => setMainTab('CARPENTERS'),
     },
     {
       title: 'ממתינים לאישור',
       value: pendingApproval.length,
       sub: 'מוצרים מאפיון',
-      onClick: () => navigate('/catalog')
+      onClick: () => navigate('/catalog'),
     },
     {
       title: 'התראות',
       value: unreadNotifCount + totalUnreadChatCount,
       sub: totalUnreadChatCount > 0 ? `${totalUnreadChatCount} הודעות צ'אט` : 'אין הודעות חדשות',
-      onClick: () => navigate('/chat')
+      onClick: () => setMainTab('ALERTS'),
     },
   ];
 
@@ -138,6 +139,9 @@ const Dashboard = () => {
               bgcolor: STAT_COLORS[i], borderRadius: 3, p: 2.5, height: 140, cursor: 'pointer',
               display: 'flex', flexDirection: 'column', justifyContent: 'space-between',
               transition: '0.15s ease', '&:hover': { transform: 'translateY(-2px)', opacity: 0.92 },
+              outline: STAT_INDEX_TO_TAB[i] && mainTab === STAT_INDEX_TO_TAB[i]
+                ? '2px solid rgba(255,255,255,0.85)'
+                : 'none',
             }}>
               <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
                 <Typography sx={{ fontSize: 13, color: 'rgba(255,255,255,0.85)', fontWeight: 500 }}>{stat.title}</Typography>
@@ -152,90 +156,189 @@ const Dashboard = () => {
         ))}
       </Grid>
 
-      <Grid container spacing={2} sx={{ mb: 2.5 }}>
-        {/* עמודה 1: הזמנות */}
-        <Grid size={{ xs: 12, md: 4 }}>
-          <Paper sx={{ borderRadius: 3, p: 2.5, border: `1px solid ${CARD_COLORS[0].border}`, bgcolor: CARD_COLORS[0].bg, height: 380, display: 'flex', flexDirection: 'column' }}>
-            <SectionHeader emoji="📦" title="הזמנות אחרונות" btnLabel="הכל" onClick={() => navigate('/manager/orders')} titleColor={CARD_COLORS[0].title} />
-            <Box sx={{ overflowY: 'auto', flexGrow: 1 }}>
-              {activeOrders.slice(0, 10).map(order => (
-                <Box key={order.id || order._id} sx={{ display: 'flex', justifyContent: 'space-between', py: 1.2, borderBottom: `1px solid ${CARD_COLORS[0].border}` }}>
-                  <Box>
-                    <Typography sx={{ fontSize: 13, fontWeight: 500 }}>{order.customer?.name || 'לקוח'}</Typography>
-                    <Typography sx={{ fontSize: 11, color: '#A1887F' }}>{new Date(order.orderDate).toLocaleDateString('he-IL')}</Typography>
-                  </Box>
-                  <Box sx={{ fontSize: 11, px: 1, py: 0.3, borderRadius: 10, bgcolor: 'white', color: STATUS_LABEL[order.status]?.color, fontWeight: 600 }}>
-                    {STATUS_LABEL[order.status]?.label || order.status}
-                  </Box>
-                </Box>
-              ))}
-            </Box>
-          </Paper>
-        </Grid>
+      <Paper
+        elevation={0}
+        sx={{
+          borderRadius: 3,
+          border: `1px solid ${C.border}`,
+          overflow: 'hidden',
+          mb: 2,
+        }}
+      >
+        <Tabs
+          value={MANAGER_MAIN_TAB_KEYS.includes(mainTab) ? mainTab : false}
+          onChange={(_, v) => setMainTab(v)}
+          variant="scrollable"
+          scrollButtons="auto"
+          allowScrollButtonsMobile
+          sx={{
+            borderBottom: `1px solid ${C.border}`,
+            bgcolor: '#FFFBF8',
+            '& .MuiTab-root': { fontSize: 13, fontWeight: 600, minHeight: 48 },
+            '& .Mui-selected': { color: C.primary },
+            '& .MuiTabs-indicator': { bgcolor: C.primary },
+          }}
+        >
+          <Tab label={`הזמנות (${activeOrders.length})`} value="ORDERS" />
+          <Tab
+            label={
+              unreadNotifCount + totalUnreadChatCount > 0
+                ? `התראות (${unreadNotifCount + totalUnreadChatCount})`
+                : 'התראות'
+            }
+            value="ALERTS"
+          />
+          <Tab label={`עומס נגרים (${carpenters.length})`} value="CARPENTERS" />
+        </Tabs>
 
-        {/* עמודה 2: התראות + מלבן צ'אט בולט */}
-        <Grid size={{ xs: 12, md: 4 }}>
-          <Paper sx={{ borderRadius: 3, p: 2.5, border: `1px solid ${CARD_COLORS[1].border}`, bgcolor: CARD_COLORS[1].bg, height: 380, display: 'flex', flexDirection: 'column' }}>
-            <SectionHeader emoji="🔔" title="התראות" titleColor={CARD_COLORS[1].title} />
-            
-            <Box sx={{ overflowY: 'auto', flexGrow: 1 }}>
-              
-              {/* 🚨 המלבן הכתום - יופיע אם יש הודעות שלא נקראו */}
-              {totalUnreadChatCount > 0 && (
-                <Box 
-                  onClick={() => navigate('/chat')}
-                  sx={{
-                    mb: 2, p: 2, borderRadius: 2, 
-                    bgcolor: '#D2691E', color: 'white',
-                    display: 'flex', alignItems: 'center', gap: 2,
-                    cursor: 'pointer', boxShadow: '0 4px 12px rgba(210, 105, 30, 0.3)',
-                    animation: 'pulse 2s infinite'
-                  }}
-                >
-                  <ChatIcon />
-                  <Box>
-                    <Typography sx={{ fontWeight: 700, fontSize: 14 }}>הודעות צ'אט חדשות!</Typography>
-                    <Typography sx={{ fontSize: 12, opacity: 0.9 }}>יש לך {totalUnreadChatCount} הודעות שמחכות לך</Typography>
-                  </Box>
-                </Box>
-              )}
-
-              {/* רשימת התראות רגילה */}
-              {notifications.filter(n => !n.isRead && n.type !== 'CHAT').length === 0 && totalUnreadChatCount === 0 ? (
-                <Alert severity="info">אין התראות חדשות</Alert>
-              ) : (
-                notifications.filter(n => !n.isRead && n.type !== 'CHAT').map(n => (
-                  <Box key={n.id || n._id} sx={{ display: 'flex', justifyContent: 'space-between', py: 1.2, borderBottom: `1px solid ${CARD_COLORS[1].border}` }}>
-                    <Box sx={{ flex: 1 }}>
-                      <Typography sx={{ fontSize: 12.5, fontWeight: 500 }}>{n.message}</Typography>
-                      <Typography sx={{ fontSize: 10, color: '#A1887F' }}>{new Date(n.createdAt).toLocaleString('he-IL')}</Typography>
+        <Box sx={{ p: { xs: 1.5, sm: 2.5 }, minHeight: { xs: 280, sm: 360 } }}>
+          {mainTab === 'ORDERS' && (
+            <Box>
+              <SectionHeader
+                emoji="📦"
+                title="הזמנות"
+                btnLabel="הכל"
+                onClick={() => navigate('/manager/orders')}
+                titleColor="#7B3F1A"
+              />
+              <Box sx={{ maxHeight: 420, overflowY: 'auto' }}>
+                {activeOrders.length === 0 ? (
+                  <Alert severity="info">אין הזמנות פעילות</Alert>
+                ) : (
+                  activeOrders.slice(0, 10).map(order => (
+                    <Box
+                      key={order.id || order._id}
+                      sx={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        py: 1.2,
+                        borderBottom: '1px solid #E8C9B0',
+                      }}
+                    >
+                      <Box>
+                        <Typography sx={{ fontSize: 13, fontWeight: 500 }}>{order.customer?.name || 'לקוח'}</Typography>
+                        <Typography sx={{ fontSize: 11, color: '#A1887F' }}>
+                          {new Date(order.orderDate).toLocaleDateString('he-IL')}
+                        </Typography>
+                      </Box>
+                      <Box
+                        sx={{
+                          fontSize: 11,
+                          px: 1,
+                          py: 0.3,
+                          borderRadius: 10,
+                          bgcolor: 'white',
+                          color: STATUS_LABEL[order.status]?.color,
+                          fontWeight: 600,
+                        }}
+                      >
+                        {STATUS_LABEL[order.status]?.label || order.status}
+                      </Box>
                     </Box>
-                    <Button size="small" sx={{ minWidth: 0, color: '#D2691E' }} onClick={() => dispatch(markNotificationRead(n.id || n._id))}>✓</Button>
-                  </Box>
-                ))
-              )}
+                  ))
+                )}
+              </Box>
             </Box>
-          </Paper>
-        </Grid>
+          )}
 
-        {/* עמודה 3: עומס נגרים */}
-        <Grid size={{ xs: 12, md: 4 }}>
-          <Paper sx={{ borderRadius: 3, p: 2.5, border: `1px solid ${CARD_COLORS[2].border}`, bgcolor: CARD_COLORS[2].bg, height: 380, display: 'flex', flexDirection: 'column' }}>
-            <SectionHeader emoji="🪚" title="עומס נגרים" btnLabel="הכל" onClick={() => navigate('/employees')} titleColor={CARD_COLORS[2].title} />
-            <Box sx={{ overflowY: 'auto', flexGrow: 1 }}>
-              {carpenters.map(c => (
-                <Box key={c.id || c._id} sx={{ mb: 2 }}>
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-                    <Typography sx={{ fontSize: 13, fontWeight: 500 }}>{c.fullName}</Typography>
-                    <Typography sx={{ fontSize: 11 }}>{c.currentWorkloadHours || 0} ש'</Typography>
+          {mainTab === 'ALERTS' && (
+            <Box>
+              <SectionHeader emoji="🔔" title="התראות" titleColor="#6B3520" />
+              <Box sx={{ maxHeight: 420, overflowY: 'auto' }}>
+                {totalUnreadChatCount > 0 && (
+                  <Box
+                    onClick={() => navigate('/chat')}
+                    sx={{
+                      mb: 2,
+                      p: 2,
+                      borderRadius: 2,
+                      bgcolor: '#D2691E',
+                      color: 'white',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 2,
+                      cursor: 'pointer',
+                      boxShadow: '0 4px 12px rgba(210, 105, 30, 0.3)',
+                      animation: 'pulse 2s infinite',
+                    }}
+                  >
+                    <ChatIcon />
+                    <Box>
+                      <Typography sx={{ fontWeight: 700, fontSize: 14 }}>הודעות צ&apos;אט חדשות!</Typography>
+                      <Typography sx={{ fontSize: 12, opacity: 0.9 }}>
+                        יש לך {totalUnreadChatCount} הודעות שמחכות לך
+                      </Typography>
+                    </Box>
                   </Box>
-                  <LinearProgress variant="determinate" value={Math.min((c.currentWorkloadHours || 0) * 2.5, 100)} sx={{ height: 6, borderRadius: 2 }} />
-                </Box>
-              ))}
+                )}
+                {notifications.filter(n => !n.isRead && n.type !== 'CHAT').length === 0 &&
+                totalUnreadChatCount === 0 ? (
+                  <Alert severity="info">אין התראות חדשות</Alert>
+                ) : (
+                  notifications
+                    .filter(n => !n.isRead && n.type !== 'CHAT')
+                    .map(n => (
+                      <Box
+                        key={n.id || n._id}
+                        sx={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          py: 1.2,
+                          borderBottom: '1px solid #DDB89A',
+                        }}
+                      >
+                        <Box sx={{ flex: 1 }}>
+                          <Typography sx={{ fontSize: 12.5, fontWeight: 500 }}>{n.message}</Typography>
+                          <Typography sx={{ fontSize: 10, color: '#A1887F' }}>
+                            {new Date(n.createdAt).toLocaleString('he-IL')}
+                          </Typography>
+                        </Box>
+                        <Button
+                          size="small"
+                          sx={{ minWidth: 0, color: '#D2691E' }}
+                          onClick={() => dispatch(markNotificationRead(n.id || n._id))}
+                        >
+                          ✓
+                        </Button>
+                      </Box>
+                    ))
+                )}
+              </Box>
             </Box>
-          </Paper>
-        </Grid>
-      </Grid>
+          )}
+
+          {mainTab === 'CARPENTERS' && (
+            <Box>
+              <SectionHeader
+                emoji="🪚"
+                title="עומס נגרים"
+                btnLabel="הכל"
+                onClick={() => navigate('/employees')}
+                titleColor="#4A5228"
+              />
+              <Box sx={{ maxHeight: 420, overflowY: 'auto' }}>
+                {carpenters.length === 0 ? (
+                  <Alert severity="info">אין נגרים במערכת</Alert>
+                ) : (
+                  carpenters.map(c => (
+                    <Box key={c.id || c._id} sx={{ mb: 2 }}>
+                      <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+                        <Typography sx={{ fontSize: 13, fontWeight: 500 }}>{c.fullName}</Typography>
+                        <Typography sx={{ fontSize: 11 }}>{c.currentWorkloadHours || 0} ש&apos;</Typography>
+                      </Box>
+                      <LinearProgress
+                        variant="determinate"
+                        value={Math.min((c.currentWorkloadHours || 0) * 2.5, 100)}
+                        sx={{ height: 6, borderRadius: 2 }}
+                      />
+                    </Box>
+                  ))
+                )}
+              </Box>
+            </Box>
+          )}
+        </Box>
+      </Paper>
 
       {/* CSS לאנימציה של המלבן הכתום */}
       <style>

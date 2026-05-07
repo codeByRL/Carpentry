@@ -22,11 +22,28 @@ const typeLabel = {
   TO_CARPENTER: "הובלה לנגר",
   TO_CUSTOMER: "הובלה לבית הלקוח",
 };
+const pointTypeLabel = {
+  WAREHOUSE: "מחסן",
+  CARPENTER: "נגר",
+  CUSTOMER: "לקוח",
+};
 const getOrderCode = (stop) => {
   const rawId = stop?.order?._id || stop?.order;
   if (!rawId) return "—";
   const idStr = String(rawId);
   return `#${idStr.slice(-6)}`;
+};
+
+const isStopDelivered = (s) => s?.status === "COMPLETED" || !!s?.completedAt;
+const getSourceLine = (s) => {
+  const type = pointTypeLabel[s?.sourceType] || "מוצא";
+  const addr = s?.sourceAddress || "—";
+  return `${type}: ${addr}`;
+};
+const getDestinationLine = (s) => {
+  const type = pointTypeLabel[s?.destinationType] || "יעד";
+  const addr = s?.destinationAddress || s?.address || "—";
+  return `${type}: ${addr}`;
 };
 
 const DriverDeliveries = () => {
@@ -36,7 +53,8 @@ const DriverDeliveries = () => {
   const [pendingPool, setPendingPool] = useState([]);
   const [myRun, setMyRun] = useState(null);
   const [desiredHours, setDesiredHours] = useState("8");
-  const [tab, setTab] = useState(0);
+  /** ברירת מחדל: הובלות שאני מבצע היום */
+  const [tab, setTab] = useState(1);
   const [error, setError] = useState("");
 
   const loadData = async () => {
@@ -73,12 +91,12 @@ const DriverDeliveries = () => {
     }
   };
 
-  const handleCompleteStop = async (index) => {
+  const handleCompleteStop = async (stopId) => {
     if (!myRun?._id) return;
     try {
       setCompleteLoading(true);
       setError("");
-      await API.post("/delivery/complete-stop", { runId: myRun._id, stopIndex: index });
+      await API.post("/delivery/complete-stop", { runId: myRun._id, stopId });
       await loadData();
     } catch (e) {
       setError(e.response?.data?.message || "שגיאה בסימון הובלה כהושלמה");
@@ -96,28 +114,6 @@ const DriverDeliveries = () => {
     () => myStops.filter((s) => s.deliveryType === "TO_CUSTOMER"),
     [myStops]
   );
-  const routePoints = useMemo(
-    () => myStops.filter((s) => s.status !== "COMPLETED" && s.address).map((s) => s.address),
-    [myStops]
-  );
-
-  const openClaimedDailyRoute = () => {
-    if (!routePoints.length) return;
-    if (routePoints.length === 1) {
-      const stop = myStops.find((s) => s.status !== "COMPLETED");
-      if (stop?.wazeUrl) window.open(stop.wazeUrl, "_blank");
-      return;
-    }
-    const origin = routePoints[0];
-    const destination = routePoints[routePoints.length - 1];
-    const waypoints = routePoints.slice(1, -1);
-    const url = `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(
-      origin
-    )}&destination=${encodeURIComponent(destination)}&travelmode=driving${
-      waypoints.length ? `&waypoints=${encodeURIComponent(waypoints.join("|"))}` : ""
-    }`;
-    window.open(url, "_blank");
-  };
 
   if (loading) {
     return (
@@ -166,25 +162,25 @@ const DriverDeliveries = () => {
               תכנון היום: כ-{myRun.estimatedDuration || 0} שעות | מרחק משוער: {myRun.totalDistance || 0} ק"מ
             </Typography>
           )}
-          {!!routePoints.length && (
-            <Button
-              size="small"
-              variant="outlined"
-              startIcon={<RouteIcon />}
-              onClick={openClaimedDailyRoute}
-              sx={{ mt: 1.2 }}
-            >
-              פתח מסלול יומי (רק הזמנות שנתפסו)
-            </Button>
-          )}
         </CardContent>
       </Card>
 
-      <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 2 }}>
+      <Tabs
+        value={tab}
+        onChange={(_, v) => setTab(v)}
+        variant="scrollable"
+        scrollButtons="auto"
+        allowScrollButtonsMobile
+        sx={{
+          mb: 2,
+          borderBottom: '1px solid #E8C9B0',
+          '& .MuiTab-root': { fontSize: { xs: 11.5, sm: 13 }, minHeight: 44 },
+        }}
+      >
         <Tab label={`כל ההובלות הממתינות (${pendingPool.length})`} />
         <Tab label={`הובלות שאני מבצע היום (${myStops.length})`} />
-        <Tab label={`היום לנגרים (${myCarpenterStops.length})`} />
-        <Tab label={`היום ללקוחות (${myCustomerStops.length})`} />
+        <Tab label={`בתהליך מסירה לנגר (${myCarpenterStops.length})`} />
+        <Tab label={`בתהליך מסירה ללקוח (${myCustomerStops.length})`} />
       </Tabs>
 
       {tab === 0 && (
@@ -202,7 +198,8 @@ const DriverDeliveries = () => {
                     <Typography sx={{ fontSize: 12, color: "#A1887F", mb: 0.4 }}>
                       מספר הזמנה: {getOrderCode(s)}
                     </Typography>
-                    <Typography sx={{ fontSize: 13 }}>{s.address}</Typography>
+                    <Typography sx={{ fontSize: 13 }}>{getSourceLine(s)}</Typography>
+                    <Typography sx={{ fontSize: 13 }}>{getDestinationLine(s)}</Typography>
                     <Typography sx={{ fontSize: 12, color: "#7B6A5F" }}>
                       {s.contactName} {s.contactPhone ? `| ${s.contactPhone}` : ""}
                     </Typography>
@@ -229,22 +226,39 @@ const DriverDeliveries = () => {
                     <Typography sx={{ fontSize: 12, color: "#A1887F", mb: 0.4 }}>
                       מספר הזמנה: {getOrderCode(s)}
                     </Typography>
-                    <Typography sx={{ fontSize: 13 }}>{s.address}</Typography>
+                    <Typography sx={{ fontSize: 13 }}>{getSourceLine(s)}</Typography>
+                    <Typography sx={{ fontSize: 13 }}>{getDestinationLine(s)}</Typography>
                     <Typography sx={{ fontSize: 12, color: "#7B6A5F", mb: 1 }}>
                       {s.contactName} {s.contactPhone ? `| ${s.contactPhone}` : ""}
                     </Typography>
-                    <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap" }}>
+                    <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap", alignItems: "center" }}>
+                      {isStopDelivered(s) && (
+                        <Typography
+                          component="span"
+                          sx={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: 0.5,
+                            color: "#2E7D32",
+                            fontWeight: 700,
+                            fontSize: 14,
+                          }}
+                        >
+                          <CheckCircleIcon sx={{ fontSize: 20 }} />
+                          נמסר
+                        </Typography>
+                      )}
                       <Link href={s.wazeUrl} target="_blank" underline="none">
                         <Button size="small" variant="outlined" startIcon={<LocalShippingIcon />}>
                           פתח Waze
                         </Button>
                       </Link>
-                      {s.status !== "COMPLETED" && (
+                      {!isStopDelivered(s) && (
                         <Button
                           size="small"
                           variant="contained"
                           startIcon={<CheckCircleIcon />}
-                          onClick={() => handleCompleteStop(i)}
+                          onClick={() => handleCompleteStop(s._id)}
                           disabled={completeLoading}
                           sx={{ bgcolor: "#2E7D32", "&:hover": { bgcolor: "#1B5E20" } }}
                         >

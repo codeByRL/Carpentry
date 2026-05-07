@@ -63,7 +63,7 @@ const isValidIsraeliId = (value = '') => {
 };
 
 const SectionHeader = ({ emoji, title, btnLabel, onClick, titleColor = '#3E2723' }) => (
-  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2, flexWrap: 'wrap', gap: 1 }}>
     <Typography sx={{ fontWeight: 700, fontSize: 14, color: titleColor }}>
       {emoji} {title}
     </Typography>

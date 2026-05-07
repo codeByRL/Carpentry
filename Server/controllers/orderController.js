@@ -181,12 +181,21 @@ const getAllOrders = async (req, res) => {
     const orders = await getAllOrdersService(filters);
 
     const now = new Date();
-    const ordersWithAlert = orders.map(order => ({
-      ...order.toObject(),
-      // This assumes 'orderDate' is the start date, and 7 days is the alert threshold.
-      // Adjust logic as needed.
-      isOverdue: (now - order.orderDate) / (1000 * 60 * 60 * 24) >= 7 && order.status !== "DONE" && order.status !== "QUOTATION_PENDING" && !order.isPaid
-    }));
+    const ordersWithAlert = orders.map((order) => {
+      const obj = order.toObject ? order.toObject() : { ...order };
+      /** סטטוס ליקוט אמור להיות בלי שורות "חסר" — שאריות ממצב ישן גורמות ל-UI לחסום צ'קבוקס */
+      if (obj.status === "WAITING_FOR_PICKING" && Array.isArray(obj.unavailableMaterials)) {
+        obj.unavailableMaterials = [];
+      }
+      return {
+        ...obj,
+        isOverdue:
+          (now - order.orderDate) / (1000 * 60 * 60 * 24) >= 7 &&
+          order.status !== "DONE" &&
+          order.status !== "QUOTATION_PENDING" &&
+          !order.isPaid,
+      };
+    });
 
     res.json(ordersWithAlert);
   } catch (error) {

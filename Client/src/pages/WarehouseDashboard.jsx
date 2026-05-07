@@ -98,6 +98,33 @@ const StatCard = ({ title, value, sub, color, icon, onClick }) => (
   </Box>
 );
 
+/** מזהה מוצר בסיס אחיד (ObjectId / מחרוזת / אובייקט מאוכלס) */
+const materialProductIdString = (ref) => {
+  if (ref == null) return '';
+  if (typeof ref === 'string' || typeof ref === 'number') return String(ref);
+  if (typeof ref === 'object') {
+    if (ref.$oid != null) return String(ref.$oid);
+    const id = ref._id ?? ref.id;
+    if (id != null && typeof id === 'object' && id.$oid != null) return String(id.$oid);
+    if (id != null) return String(id);
+  }
+  try {
+    const s = String(ref);
+    return s === '[object Object]' ? '' : s;
+  } catch {
+    return '';
+  }
+};
+
+/** תצוגת תור מחסן: בליקוט אין "חסרים" — מונע תקיעות מול שאריות ב-state */
+const orderForWarehouseCard = (o) => {
+  if (!o) return o;
+  if (o.status === 'WAITING_FOR_PICKING') {
+    return { ...o, unavailableMaterials: [] };
+  }
+  return o;
+};
+
 // ─── כרטיס הזמנה ─────────────────────────────────────────
 const OrderCard = ({ order, onPick, onReady, newProductIds }) => {
   const allPicked = order.requiredMaterials?.every(m => m.isPicked);
@@ -151,14 +178,27 @@ const OrderCard = ({ order, onPick, onReady, newProductIds }) => {
 
       <Grid container spacing={1.5}>
         {order.requiredMaterials?.map((mat, i) => {
-          const productId    = (mat.product?._id || mat.product)?.toString();
-          const isMissing    = order.unavailableMaterials?.some(
-            u => (u.product?._id || u.product)?.toString() === productId
-          );
-          const isNewProduct = newProductIds.includes(productId);
+          const productId = materialProductIdString(mat.product);
+          /** חסר במלאי רק בהזמנות ממתין לאספקה, והשורה תואמת לרשימת החסרים */
+          const isMissing =
+            order.status === 'WAITING_FOR_SUPPLY' &&
+            !!productId &&
+            (order.unavailableMaterials || []).some(
+              (u) => materialProductIdString(u.product) === productId
+            );
+          /** מוצר חדש: עדיפות לשדה isNew מהמסמך המאוכלס; רשימת newProductIds מהדשבורד עלולה להיות לא מעודכנת ולחסום צ'קבוקס בטעות */
+          const newFlagFromDoc = mat.product?.isNew;
+          const isNewProduct =
+            newFlagFromDoc === true ||
+            (newFlagFromDoc !== false && productId && newProductIds.includes(productId));
+          const needsWarehouseAck = order.status === 'WAITING_FOR_WAREHOUSE';
+          const cannotPickMissing =
+            order.status === 'WAITING_FOR_SUPPLY' && isMissing;
+          const pickDisabled =
+            !productId || mat.isPicked || cannotPickMissing || isNewProduct || needsWarehouseAck;
 
           return (
-            <Grid size={{ xs: 12, sm: 4 }} key={i}>
+            <Grid size={{ xs: 12, sm: 4 }} key={productId || `mat-${i}`}>
               <Box sx={{
                 p: 1.5, borderRadius: 2,
                 bgcolor: mat.isPicked ? '#F1F8E9'
@@ -170,10 +210,19 @@ const OrderCard = ({ order, onPick, onReady, newProductIds }) => {
               }}>
                 <Checkbox
                   checked={!!mat.isPicked}
-                  disabled={mat.isPicked || isMissing || isNewProduct}
-                  onChange={() => onPick(order._id, productId)}
+                  disabled={pickDisabled}
+                  onChange={() => {
+                    if (!productId || pickDisabled) return;
+                    onPick(order._id, productId);
+                  }}
                   size="small"
-                  sx={{ color: C.primary, '&.Mui-checked': { color: '#2E7D32' } }}
+                  sx={{
+                    flexShrink: 0,
+                    p: 0.5,
+                    color: C.primary,
+                    '&.Mui-checked': { color: '#2E7D32' },
+                  }}
+                  slotProps={{ input: { 'aria-label': `ליקוט ${mat.product?.name || productId}` } }}
                 />
                 <Box sx={{ flex: 1 }}>
                   <Typography sx={{
@@ -605,13 +654,15 @@ const WarehouseDashboard = () => {
       const updatedOrder = await dispatch(
         pickMaterialAction({ orderId, materialId, warehouseUserId: user?.id || user?._id })
       ).unwrap();
+      dispatch(fetchAllOrders());
       const allPicked = (updatedOrder?.requiredMaterials || []).every((m) => !!m.isPicked);
       if (allPicked) {
         printShippingLabel(updatedOrder);
         setSnackMsg('כל החומרים נלקטו — נפתחה תווית להדפסה');
       }
     } catch (e) {
-      setSnackMsg('שגיאה בסימון ליקוט ❌');
+      const msg = typeof e === 'string' ? e : e?.message || 'שגיאה בסימון ליקוט';
+      setSnackMsg(`${msg} ❌`);
     }
   };
 
@@ -645,7 +696,14 @@ const WarehouseDashboard = () => {
             <div class="meta">הודפס בתאריך: ${printDate}</div>
 
             <div class="section">
-              <div class="section-title">פרטי הזמנה</div>
+              <div class="section-title">מסלול הובלה</div>
+              <div class="line">מוצא: מחסן ראשי</div>
+              <div class="line">יעד: נגר — ${carpenterName}</div>
+              <div class="line">כתובת יעד: ${carpenterAddress}</div>
+            </div>
+
+            <div class="section">
+              <div class="section-title">פרטי לקוח</div>
               <div class="line">לקוח: ${customerName}</div>
               <div class="line">כתובת לקוח: ${customerAddress}</div>
               <div class="line">טלפון לקוח: ${customerPhone}</div>
@@ -702,6 +760,8 @@ const WarehouseDashboard = () => {
       setSnackMsg(`סחורה מ"${supplierName}" עודכנה במלאי ✅`);
       dispatch(fetchAllBaseProducts());
       dispatch(fetchPurchaseList());
+      dispatch(fetchAllOrders());
+      dispatch(fetchOrdersWithNewProducts());
     } catch (e) {
       setSnackMsg('שגיאה בעדכון הגעה ❌');
     } finally {
@@ -843,7 +903,7 @@ const WarehouseDashboard = () => {
               {pickingOrders.length === 0
                 ? <Alert severity="success">אין הזמנות ממתינות לליקוט 🎉</Alert>
                 : pickingOrders.map(o => (
-                    <OrderCard key={o._id} order={o} onPick={handlePick} onReady={handleReady} newProductIds={newProductIds} />
+                    <OrderCard key={o._id} order={orderForWarehouseCard(o)} onPick={handlePick} onReady={handleReady} newProductIds={newProductIds} />
                   ))
               }
             </Box>
@@ -854,7 +914,7 @@ const WarehouseDashboard = () => {
               {supplyOrders.length === 0
                 ? <Alert severity="info">אין חוסרים כרגע ✅</Alert>
                 : supplyOrders.map(o => (
-                    <OrderCard key={o._id} order={o} onPick={handlePick} onReady={handleReady} newProductIds={newProductIds} />
+                    <OrderCard key={o._id} order={orderForWarehouseCard(o)} onPick={handlePick} onReady={handleReady} newProductIds={newProductIds} />
                   ))
               }
             </Box>
@@ -871,7 +931,7 @@ const WarehouseDashboard = () => {
               {allWarehouseQueueOrders.length === 0
                 ? <Alert severity="success">אין הזמנות בתור המחסן 🎉</Alert>
                 : allWarehouseQueueOrders.map(o => (
-                    <OrderCard key={o._id} order={o} onPick={handlePick} onReady={handleReady} newProductIds={newProductIds} />
+                    <OrderCard key={o._id} order={orderForWarehouseCard(o)} onPick={handlePick} onReady={handleReady} newProductIds={newProductIds} />
                   ))
               }
             </Box>
@@ -939,8 +999,11 @@ const WarehouseDashboard = () => {
                 </Typography>
               </Box>
 
-              <TableContainer component={Paper} sx={{ borderRadius: 3 }}>
-                <Table>
+              <TableContainer
+                component={Paper}
+                sx={{ borderRadius: 3, overflowX: 'auto', WebkitOverflowScrolling: 'touch', maxWidth: '100%' }}
+              >
+                <Table size="small" sx={{ minWidth: 900 }}>
                   <TableHead sx={{ bgcolor: '#EEEEEE' }}>
                     <TableRow>
                       <TableCell><b>מוצר בסיס</b></TableCell>

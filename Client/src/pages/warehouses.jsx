@@ -8,7 +8,9 @@ import { fetchAllBaseProducts, fetchPurchaseList } from '../store/slices/warehou
 
 const Warehouses = () => {
   const dispatch = useDispatch();
+  const { user } = useSelector((s) => s.auth);
   const { baseProducts, purchaseList, loading, error } = useSelector((s) => s.warehouse);
+  const isManager = user?.role === 'MANAGER';
 
   useEffect(() => {
     dispatch(fetchAllBaseProducts());
@@ -29,10 +31,12 @@ const Warehouses = () => {
   return (
     <Box>
       <Typography variant="h5" sx={{ fontWeight: 'bold', color: '#5D4037', mb: 2 }}>
-        ניהול ומחסן (תצוגה בלבד)
+        {isManager ? 'סטטוס מחסן' : 'מלאי ומחסן'}
       </Typography>
       <Typography sx={{ fontSize: 13, color: '#8D6E63', mb: 2 }}>
-        מסך מנהל לתצוגה בלבד: מלאי קיים, חומרים באספקה, וחומרים הממתינים לאספקה.
+        {isManager
+          ? 'תצוגה בלבד: מלאי קיים, חומרים באספקה, וחומרים הממתינים לאספקה.'
+          : 'סקירת מלאי, חומרים באספקה וחומרים הממתינים לאספקה.'}
       </Typography>
 
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
@@ -45,8 +49,8 @@ const Warehouses = () => {
 
       <Paper sx={{ p: 2, borderRadius: 3, mb: 2 }}>
         <Typography sx={{ fontWeight: 700, mb: 1.5 }}>מלאי קיים</Typography>
-        <TableContainer>
-          <Table size="small">
+        <TableContainer sx={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch', maxWidth: '100%' }}>
+          <Table size="small" sx={{ minWidth: 520 }}>
             <TableHead>
               <TableRow>
                 <TableCell>מוצר</TableCell>
@@ -80,8 +84,8 @@ const Warehouses = () => {
 
       <Paper sx={{ p: 2, borderRadius: 3 }}>
         <Typography sx={{ fontWeight: 700, mb: 1.5 }}>חומרי גלם באספקה / ממתינים לאספקה</Typography>
-        <TableContainer>
-          <Table size="small">
+        <TableContainer sx={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch', maxWidth: '100%' }}>
+          <Table size="small" sx={{ minWidth: 520 }}>
             <TableHead>
               <TableRow>
                 <TableCell>חומר</TableCell>

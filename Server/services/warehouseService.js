@@ -1,7 +1,6 @@
 import Order from "../models/Order.js";
 import BaseProduct from "../models/BaseProduct.js";
 import PurchaseList from "../models/PurchaseList.js";
-import mongoose from "mongoose";
 
 const checkMaterialsAvailability = async (requiredMaterials) => {
   const availableItems = [];
@@ -47,52 +46,85 @@ const markOrderAsSeen = async (orderId, warehouseUserId) => {
   return order;
 };
 
+/**
+ * ליקוט חומר — בלי multi-document transaction (MongoDB standalone ללא replica set נכשל ב-commitTransaction).
+ * לסביבת ייצור עם replica set אפשר לעטוף שוב ב-session אם נדרש אטומיות מלאה.
+ */
 const pickMaterial = async (orderId, materialId, warehouseUserId) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
+  const order = await Order.findById(orderId);
+  if (!order) throw new Error("Order not found");
 
-  try {
-    const order = await Order.findById(orderId).session(session);
-    if (!order) throw new Error("Order not found");
-
-    const material = order.requiredMaterials.find(
-      m => m.product.toString() === materialId
-    );
-    if (!material) throw new Error("Material not found in order");
-    if (material.isPicked) throw new Error("Material already picked");
-
-    const baseProduct = await BaseProduct.findById(materialId).session(session);
-    if (!baseProduct) throw new Error("Base product not found");
-
-    const physicalStock = Number(baseProduct.quantity || 0);
-    if (physicalStock < material.quantity) throw new Error("Insufficient stock");
-
-    baseProduct.quantity -= material.quantity;
-    baseProduct.reservedQuantity = Math.max(
-      Number(baseProduct.reservedQuantity || 0) - material.quantity,
-      0
-    );
-    await baseProduct.save({ session });
-
-    material.isPicked = true;
-    await order.save({ session });
-
-    const allPicked = order.requiredMaterials.every(m => m.isPicked);
-    if (allPicked) {
-      order.status = "READY_FOR_SHIPPING";
-      order.readyForShippingAt = new Date();
-      order.warehouseHandledBy = warehouseUserId;
-      await order.save({ session });
-    }
-
-    await session.commitTransaction();
-    return order;
-  } catch (error) {
-    await session.abortTransaction();
-    throw error;
-  } finally {
-    session.endSession();
+  if (!["WAITING_FOR_PICKING", "WAITING_FOR_SUPPLY"].includes(order.status)) {
+    throw new Error("ההזמנה לא במצב לליקוט מחסן");
   }
+
+  const material = order.requiredMaterials.find((m) => {
+    const pid = m.product?._id ?? m.product;
+    return pid && String(pid) === String(materialId);
+  });
+  if (!material) throw new Error("Material not found in order");
+  if (material.isPicked) throw new Error("Material already picked");
+
+  /** מצב ליקוט אמור בלי רשימת חסרים; שאריות ממסד גורמות לדחיית ליקוט למרות תצוגה תקינה ב-API */
+  if (order.status === "WAITING_FOR_PICKING" && (order.unavailableMaterials || []).length > 0) {
+    order.unavailableMaterials = [];
+    order.markModified("unavailableMaterials");
+    await order.save();
+  }
+
+  const baseProduct = await BaseProduct.findById(materialId);
+  if (!baseProduct) throw new Error("Base product not found");
+
+  /** מלאי פיזי במדף (לא לבדוק רק quantity−reserved — שריון יכול לכסות את כל הכמות לפני הליקוט) */
+  const onHand = Number(baseProduct.quantity || 0);
+  const need = Number(material.quantity || 0);
+  if (need <= 0) throw new Error("כמות לא תקינה לליקוט");
+
+  const mid = String(materialId);
+  const stillListedUnavailable = (order.unavailableMaterials || []).some((u) => {
+    const uid = u.product?._id ?? u.product;
+    return uid && String(uid) === mid;
+  });
+
+  if (order.status === "WAITING_FOR_SUPPLY" && stillListedUnavailable) {
+    if (onHand < need) {
+      throw new Error("חומר עדיין מסומן כחסר במלאי — יש לעדכן הגעת אספקה או מלאי");
+    }
+    order.unavailableMaterials = (order.unavailableMaterials || []).filter((u) => {
+      const uid = u.product?._id ?? u.product;
+      return !(uid && String(uid) === mid);
+    });
+    order.markModified("unavailableMaterials");
+    if (order.unavailableMaterials.length === 0) {
+      order.status = "WAITING_FOR_PICKING";
+    }
+    await order.save();
+  }
+
+  if (onHand < need) throw new Error("Insufficient stock");
+
+  baseProduct.quantity = onHand - need;
+  baseProduct.reservedQuantity = Math.max(
+    Number(baseProduct.reservedQuantity || 0) - need,
+    0
+  );
+  await baseProduct.save();
+
+  material.isPicked = true;
+  order.markModified("requiredMaterials");
+  await order.save();
+
+  const allPicked = order.requiredMaterials.every(m => m.isPicked);
+  if (allPicked) {
+    order.status = "READY_FOR_SHIPPING";
+    order.readyForShippingAt = new Date();
+    if (warehouseUserId != null && warehouseUserId !== "") {
+      order.warehouseHandledBy = warehouseUserId;
+    }
+    await order.save();
+  }
+
+  return order;
 };
 
 const createNewBaseProduct = async (data) => {
@@ -208,18 +240,28 @@ const updateStockOnArrival = async (arrivals) => {
     const nowAvailable = [];
 
     for (const material of order.unavailableMaterials) {
-      const baseProduct = await BaseProduct.findById(material.product._id);
+      const productRef = material.product?._id ?? material.product;
+      if (!productRef) {
+        stillUnavailable.push(material);
+        continue;
+      }
+      const baseProduct = await BaseProduct.findById(productRef);
+      if (!baseProduct) {
+        stillUnavailable.push(material);
+        continue;
+      }
       const available = baseProduct.quantity - baseProduct.reservedQuantity;
+      const reqQty = Number(material.quantity || 0);
 
-      if (available < material.quantity) {
+      if (available < reqQty) {
         stillUnavailable.push({
           ...material.toObject(),
           availableQuantity: available,
-          neededQuantity: material.quantity - available
+          neededQuantity: reqQty - available
         });
       } else {
         nowAvailable.push(material);
-        baseProduct.reservedQuantity += material.quantity;
+        baseProduct.reservedQuantity = Number(baseProduct.reservedQuantity || 0) + reqQty;
         await baseProduct.save();
       }
     }
@@ -227,13 +269,20 @@ const updateStockOnArrival = async (arrivals) => {
     order.unavailableMaterials = stillUnavailable;
 
     for (const mat of nowAvailable) {
-      const existsInAvailable = order.availableMaterials.some(
-        m => m.product.toString() === mat.product._id.toString()
-      );
+      const matPid = (mat.product?._id ?? mat.product)?.toString();
+      if (!matPid) continue;
+      const existsInAvailable = order.availableMaterials.some((m) => {
+        const mid = (m.product?._id ?? m.product)?.toString();
+        return mid === matPid;
+      });
       if (!existsInAvailable) order.availableMaterials.push(mat);
     }
 
-    if (stillUnavailable.length === 0) order.status = "WAITING_FOR_PICKING";
+    if (stillUnavailable.length === 0) {
+      order.status = "WAITING_FOR_PICKING";
+      order.unavailableMaterials = [];
+      order.markModified("unavailableMaterials");
+    }
 
     await order.save();
   }

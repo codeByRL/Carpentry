@@ -34,11 +34,14 @@ export const getMyRoute = async (req, res) => {
  */
 export const markStopCompleted = async (req, res) => {
   try {
-    const { runId, stopIndex } = req.body;
-    const updatedRun = await deliveryService.completeStop(runId, stopIndex);
+    const { runId, stopId, stopIndex } = req.body;
+    const stopRef = stopId ?? stopIndex;
+    const updatedRun = await deliveryService.completeStop(runId, stopRef, req.user.id);
     res.json({ message: "Stop completed", run: updatedRun });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    const isAuth = /Not authorized/i.test(error.message || "");
+    const isNotFound = /not found/i.test(error.message || "");
+    res.status(isAuth ? 403 : isNotFound ? 404 : 500).json({ message: error.message });
   }
 };
 

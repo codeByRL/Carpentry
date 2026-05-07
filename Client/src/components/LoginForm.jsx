@@ -15,7 +15,19 @@ const LoginForm = ({ onLogin, loading, error }) => {
   };
 
   return (
-    <Paper elevation={6} sx={{ p: 4, display: 'flex', flexDirection: 'column', alignItems: 'center', borderRadius: 4 }}>
+    <Paper
+      elevation={6}
+      sx={{
+        p: { xs: 2.5, sm: 4 },
+        width: '100%',
+        maxWidth: 440,
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        borderRadius: 4,
+        boxSizing: 'border-box',
+      }}
+    >
       <Box sx={{ bgcolor: 'primary.main', p: 2, borderRadius: '50%', mb: 2 }}>
         <WoodIcon sx={{ color: 'white', fontSize: 40 }} />
       </Box>

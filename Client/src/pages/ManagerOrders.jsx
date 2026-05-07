@@ -51,8 +51,12 @@ const ManagerOrders = () => {
 
   const activeOrders = orders.filter(order => order.status !== 'DONE');
 
+  const pausedByIssueCount = activeOrders.filter(o => o.carpenterPaused).length;
+
   const filtered = activeOrders.filter(order => {
-    const matchStatus = statusFilter === 'ALL' || order.status === statusFilter;
+    const matchStatus =
+      statusFilter === 'ALL' ||
+      (statusFilter === 'CARPENTER_PAUSED' ? order.carpenterPaused : order.status === statusFilter);
     const matchSearch =
       order.customer?.name?.toLowerCase().includes(search.toLowerCase()) ||
       order.customer?.phone1?.includes(search) ||
@@ -111,6 +115,15 @@ const ManagerOrders = () => {
           size="small"
         >
           <ToggleButton value="ALL">הכל ({activeOrders.length})</ToggleButton>
+          <ToggleButton value="CARPENTER_PAUSED">
+            <Chip
+              label={pausedByIssueCount}
+              size="small"
+              color="error"
+              sx={{ mr: 0.5, height: 18, fontSize: 11 }}
+            />
+            מושהות בשל תקלה
+          </ToggleButton>
           {Object.entries(STATUS_LABELS).map(([key, { label, color }]) => {
             const count = activeOrders.filter(o => o.status === key).length;
             return (
@@ -127,8 +140,17 @@ const ManagerOrders = () => {
       {filtered.length === 0 ? (
         <Alert severity="info">{emptyText}</Alert>
       ) : (
-        <TableContainer component={Paper} sx={{ borderRadius: 3, boxShadow: 2 }}>
-          <Table>
+        <TableContainer
+          component={Paper}
+          sx={{
+            borderRadius: 3,
+            boxShadow: 2,
+            overflowX: 'auto',
+            WebkitOverflowScrolling: 'touch',
+            maxWidth: '100%',
+          }}
+        >
+          <Table size="small" sx={{ minWidth: 920 }}>
             <TableHead sx={{ bgcolor: '#f5f5f5' }}>
               <TableRow>
                 <TableCell sx={{ fontWeight: 'bold' }}>לקוח</TableCell>
@@ -210,11 +232,16 @@ const ManagerOrders = () => {
                   </TableCell>
 
                   <TableCell>
-                    <Chip
-                      label={STATUS_LABELS[order.status]?.label || order.status}
-                      color={STATUS_LABELS[order.status]?.color || 'default'}
-                      size="small"
-                    />
+                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, alignItems: 'flex-start' }}>
+                      <Chip
+                        label={STATUS_LABELS[order.status]?.label || order.status}
+                        color={STATUS_LABELS[order.status]?.color || 'default'}
+                        size="small"
+                      />
+                      {order.carpenterPaused && (
+                        <Chip label="מושהה בשל תקלה" size="small" color="error" variant="outlined" />
+                      )}
+                    </Box>
                   </TableCell>
 
                   <TableCell>
@@ -271,6 +298,20 @@ const ManagerOrders = () => {
         <DialogContent sx={{ mt: 2 }}>
           {selectedOrder && (
             <Grid container spacing={3}>
+              {selectedOrder.carpenterPaused && (
+                <Grid item xs={12}>
+                  <Alert severity="warning" sx={{ borderRadius: 2 }}>
+                    <Typography variant="body2" sx={{ fontWeight: 700, mb: 0.5 }}>
+                      העבודה מושהית אצל הנגר בשל תקלה
+                    </Typography>
+                    <Typography variant="body2">
+                      {selectedOrder.carpenterPauseReason?.trim()
+                        ? `סיבה: ${selectedOrder.carpenterPauseReason}`
+                        : 'לא צוינה סיבה'}
+                    </Typography>
+                  </Alert>
+                </Grid>
+              )}
 
               {/* פרטי לקוח */}
               <Grid item xs={12} md={6}>

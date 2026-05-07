@@ -76,7 +76,21 @@ function App() {
         path="/login"
         element={user ? <Navigate to={
           getDefaultPathByRole(user.role)
-        } replace /> : <LoginForm onLogin={handleLogin} loading={loading} error={error} />}
+        } replace /> : (
+          <Box
+            sx={{
+              minHeight: '100vh',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              p: { xs: 2, sm: 3 },
+              bgcolor: '#F5F0EB',
+              boxSizing: 'border-box',
+            }}
+          >
+            <LoginForm onLogin={handleLogin} loading={loading} error={error} />
+          </Box>
+        )}
       />
 
       <Route element={<MainLayout />}>

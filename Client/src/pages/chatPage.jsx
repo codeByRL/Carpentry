@@ -25,6 +25,7 @@ import ClearIcon from "@mui/icons-material/Clear";
 import AddCommentIcon from "@mui/icons-material/AddComment";
 import { useParams, useNavigate } from "react-router-dom";
 import { useTheme } from "@mui/material/styles";
+import useMediaQuery from "@mui/material/useMediaQuery";
 
 import {
   fetchChatHistory,
@@ -56,6 +57,7 @@ const ChatPage = () => {
   const navigate = useNavigate();
   const dispatch = useDispatch();
   const theme = useTheme();
+  const isDesktop = useMediaQuery(theme.breakpoints.up("md"));
 
   const currentUserFromRedux = useSelector(selectUser);
   const currentUserFromStorage = authService.getCurrentUser();
@@ -301,30 +303,51 @@ const ChatPage = () => {
     return isOwnMessage(message) ? "אתה" : "משתמש";
   };
 
+  const showListPanel = isDesktop || !activePartnerId;
+  const showChatPanel = isDesktop || !!activePartnerId;
+
   return (
     <Box
       sx={{
         display: "flex",
-        height: "calc(100vh - 64px)",
+        flexDirection: { xs: "column", md: "row" },
+        alignItems: "stretch",
+        minHeight: { xs: "min(70dvh, 520px)", md: "calc(100vh - 64px)" },
+        height: { md: "calc(100vh - 64px)" },
+        maxHeight: { md: "calc(100vh - 64px)" },
         bgcolor: theme.palette.background.default,
-        p: 2,
+        p: { xs: 1, sm: 2 },
         direction: "rtl",
+        gap: { xs: 1.5, md: 0 },
+        boxSizing: "border-box",
       }}
     >
       <Paper
         elevation={3}
         sx={{
-          width: 350,
-          ml: 2,
+          width: { xs: "100%", md: 350 },
+          maxWidth: "100%",
+          flexShrink: 0,
+          ml: { xs: 0, md: 2 },
           borderRadius: 3,
-          display: "flex",
+          display: showListPanel ? "flex" : "none",
           flexDirection: "column",
-          p: 2,
+          p: { xs: 1.5, sm: 2 },
+          maxHeight: { md: "100%" },
+          overflow: "hidden",
         }}
       >
         <Typography
           variant="h5"
-          sx={{ mb: 2, fontWeight: "bold", display: "flex", alignItems: "center" }}
+          sx={{
+            mb: 2,
+            fontWeight: "bold",
+            display: "flex",
+            alignItems: "center",
+            fontSize: { xs: "1.15rem", sm: "1.5rem" },
+            flexWrap: "wrap",
+            gap: 0.5,
+          }}
         >
           <ChatIcon sx={{ ml: 1 }} />
           שיחות
@@ -399,11 +422,13 @@ const ChatPage = () => {
       <Paper
         elevation={3}
         sx={{
-          flexGrow: 1,
+          flex: 1,
+          minWidth: 0,
           borderRadius: 3,
-          display: "flex",
+          display: showChatPanel ? "flex" : "none",
           flexDirection: "column",
           overflow: "hidden",
+          minHeight: { xs: showChatPanel ? "min(65dvh, 480px)" : 0, md: 0 },
         }}
       >
         <Box
@@ -469,7 +494,7 @@ const ChatPage = () => {
                   >
                     <Box
                       sx={{
-                        maxWidth: "70%",
+                        maxWidth: { xs: "88%", sm: "75%", md: "70%" },
                         p: 1.5,
                         borderRadius: 2,
                         bgcolor: isUser ? theme.palette.primary.main : "white",

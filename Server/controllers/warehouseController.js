@@ -51,9 +51,19 @@ export const markOrderReadyForShipping = async (req, res) => {
 
 export const updateStockOnArrival = async (req, res) => {
   try {
-    const { baseProductId, quantity } = req.body;
-    const result = await warehouseService.updateStockOnArrival(baseProductId, quantity);
-    res.json(result);
+    const body = req.body || {};
+    let arrivals;
+    if (Array.isArray(body)) {
+      arrivals = body;
+    } else if (body.arrivals && Array.isArray(body.arrivals)) {
+      arrivals = body.arrivals;
+    } else if (body.baseProductId != null) {
+      arrivals = [{ productId: body.baseProductId, quantityArrived: Number(body.quantity) || 0 }];
+    } else {
+      return res.status(400).json({ error: "נדרש מערך arrivals או baseProductId + quantity" });
+    }
+    await warehouseService.updateStockOnArrival(arrivals);
+    res.json({ ok: true });
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
@@ -247,7 +257,11 @@ export const updateBaseProduct = async (req, res) => {
 export const pickMaterial = async (req, res) => {
   try {
     const { orderId } = req.params;
-    const { materialId, warehouseUserId } = req.body;
+    const { materialId } = req.body;
+    const warehouseUserId = req.body.warehouseUserId ?? req.user?.id;
+    if (materialId == null || materialId === "") {
+      return res.status(400).json({ error: "חסר מזהה חומר (materialId)" });
+    }
     await warehouseService.pickMaterial(orderId, materialId, warehouseUserId);
 
     const populated = await Order.findById(orderId)

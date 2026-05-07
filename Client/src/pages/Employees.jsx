@@ -307,8 +307,17 @@ const Employees = () => {
       {loading ? (
         <Box sx={{ display: 'flex', justifyContent: 'center', mt: 6 }}><CircularProgress /></Box>
       ) : (
-        <TableContainer component={Paper} sx={{ borderRadius: 3, boxShadow: 3 }}>
-          <Table>
+        <TableContainer
+          component={Paper}
+          sx={{
+            borderRadius: 3,
+            boxShadow: 3,
+            overflowX: 'auto',
+            WebkitOverflowScrolling: 'touch',
+            maxWidth: '100%',
+          }}
+        >
+          <Table size="small" sx={{ minWidth: 880 }}>
             <TableHead sx={{ bgcolor: '#f5f5f5' }}>
               <TableRow>
                 <TableCell>עובד</TableCell>
