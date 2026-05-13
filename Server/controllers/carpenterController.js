@@ -1,6 +1,7 @@
 import Order from "../models/Order.js";
 import CatalogProduct from "../models/CatalogProduct.js";
 import BaseProduct from "../models/BaseProduct.js";
+import { nextMaterialCode } from "../utils/materialCode.js";
 import User from "../models/User.js";
 import { getUserNotifications, markAsRead } from "../services/notificationService.js";
 import * as carpenterService from "../services/carpenterService.js";
@@ -14,10 +15,21 @@ export const getMyOrders = async (req, res) => {
   try {
     const carpenterId = req.user.id;
     
-    // מושכים הזמנות פעילות שמשויכות לנגר
-    const orders = await Order.find({ 
+    // מושכים את כל ההזמנות המשויכות לנגר לאורך מחזור החיים — כולל סטטוסים
+    // מוקדמים (הוזמנה/במחסן/ליקוט/אספקה) כדי שהנגר ידע מה משויך אליו עוד לפני
+    // שהמחסן סיים את הליקוט.
+    const orders = await Order.find({
       assignedCarpenter: carpenterId,
-      status: { $in: ["READY_FOR_SHIPPING", "IN_PROGRESS"] } 
+      status: {
+        $in: [
+          "ORDERED",
+          "WAITING_FOR_WAREHOUSE",
+          "WAITING_FOR_PICKING",
+          "WAITING_FOR_SUPPLY",
+          "READY_FOR_SHIPPING",
+          "IN_PROGRESS",
+        ],
+      },
     })
     .populate("items.catalogProduct", "name image estimatedWorkTime")
     .sort({ estimatedDeliveryDate: 1 }); // ממוין לפי דחיפות
@@ -88,6 +100,11 @@ export const markReceived = async (req, res) => {
     order.receivedByCarpenter = true;
     order.status = "IN_PROGRESS";
     order.driverMarkedDeliveredToCarpenterAt = null;
+    // משחררים את התפיסה של המוביל לרגל מחסן→נגר — סיים את תפקידו.
+    // כך כשהנגר יסיים את העבודה וההזמנה תחזור ל-READY_FOR_SHIPPING, היא תיכנס
+    // מיד לבריכה כרגל נגר→לקוח בלי תפיסה ישנה שחוסמת.
+    order.deliveryClaimedBy = null;
+    order.deliveryClaimedAt = null;
     await order.save();
 
     res.json({ message: "Order marked as received", order });
@@ -97,37 +114,55 @@ export const markReceived = async (req, res) => {
 };
 
 /**
- * נגר מסמן הזמנה כהושלמה
+ * נגר מסמן הזמנה כהושלמה.
+ * Idempotent: לחיצה חוזרת לא תפחית עומס פעם נוספת.
  */
 export const markDone = async (req, res) => {
   try {
     const { orderId } = req.params;
 
     const order = await Order.findById(orderId).populate("items.catalogProduct");
-    if (!order) return res.status(404).json({ message: "Order not found" });
+    if (!order) return res.status(404).json({ message: "ההזמנה לא נמצאה" });
 
-    if (order.assignedCarpenter.toString() !== req.user.id) {
-      return res.status(403).json({ message: "Not your order" });
+    if (!order.assignedCarpenter || order.assignedCarpenter.toString() !== req.user.id) {
+      return res.status(403).json({ message: "ההזמנה אינה משויכת אליך" });
     }
 
-    // עבודה הסתיימה אצל הנגר וממתינה להובלה
+    // אם כבר סומנה כהושלמה — לא להפחית פעם נוספת
+    if (order.carpenterCompletedAt) {
+      return res.json({
+        message: "העבודה כבר סומנה כהושלמה",
+        order,
+        alreadyCompleted: true,
+      });
+    }
+
+    const totalWorkHours = order.items.reduce((sum, item) => {
+      return sum + (item.catalogProduct?.estimatedWorkTime || 0) * (item.quantity || 1);
+    }, 0);
+
     order.status = "READY_FOR_SHIPPING";
     order.carpenterCompletedAt = new Date();
     order.carpenterPaused = false;
     order.carpenterPauseReason = "";
+    // כשההזמנה חוזרת לבריכת המובילים (הפעם כרגל נגר→לקוח) — מבטיחים שאין claim ישן.
+    order.deliveryClaimedBy = null;
+    order.deliveryClaimedAt = null;
     await order.save();
 
-    // עדכון עומס העבודה של הנגר (הפחתת שעות)
-    const totalWorkHours = order.items.reduce((sum, item) => {
-      return sum + (item.catalogProduct.estimatedWorkTime || 0) * item.quantity;
-    }, 0);
-
-    await User.findByIdAndUpdate(order.assignedCarpenter, {
-      $inc: { 
-        currentWorkloadHours: -totalWorkHours,
-        activeOrdersCount: -1 
-      }
-    });
+    // עדכון עומס העבודה של הנגר (הפחתת שעות) — נחסום מתחת לאפס למקרה של אי-עקביות היסטורית
+    await User.findByIdAndUpdate(order.assignedCarpenter, [
+      {
+        $set: {
+          currentWorkloadHours: {
+            $max: [0, { $subtract: ["$currentWorkloadHours", totalWorkHours] }],
+          },
+          activeOrdersCount: {
+            $max: [0, { $subtract: ["$activeOrdersCount", 1] }],
+          },
+        },
+      },
+    ]);
 
     res.json({ message: "העבודה הסתיימה וממתינה למוביל", order });
   } catch (error) {
@@ -238,9 +273,15 @@ export const getProductsForCharacterization = async (req, res) => {
 export const submitCharacterization = async (req, res) => {
   try {
     const { productId } = req.params;
-    const { 
-      baseProducts, 
-      estimatedWorkTime
+    const {
+      baseProducts,
+      estimatedWorkTime,
+      needsFabricSelection,
+      fabricQuantityPerUnit,
+      needsFormicaSelection,
+      formicaQuantityPerUnit,
+      needsHandleSelection,
+      handleQuantityPerUnit,
     } = req.body;
 
     const product = await CatalogProduct.findById(productId);
@@ -252,13 +293,56 @@ export const submitCharacterization = async (req, res) => {
 
     product.baseProducts = baseProducts;
     product.estimatedWorkTime = estimatedWorkTime;
-    
+
     // אפשרויות עץ לא מנוהלות יותר בטופס האפיון
     product.woodOptions = [];
     product.needsWoodSelection = false;
-    
+
+    // ⬇️ הנגר מחליט אם נדרשת בחירת בד וכמה בד נדרש ליחידה.
+    const fabricToggle = needsFabricSelection === true || needsFabricSelection === "true";
+    product.needsFabricSelection = fabricToggle;
+    if (fabricToggle) {
+      const qty = Number(fabricQuantityPerUnit);
+      if (!Number.isFinite(qty) || qty <= 0) {
+        return res.status(400).json({
+          message: "כשנדרשת בחירת בד יש להזין כמות בד נדרשת ליחידה (גדולה מ־0)",
+        });
+      }
+      product.fabricQuantityPerUnit = qty;
+    } else {
+      product.fabricQuantityPerUnit = 0;
+    }
+
+    product.needsFormicaSelection =
+      needsFormicaSelection === true || needsFormicaSelection === "true";
+    if (product.needsFormicaSelection) {
+      const formicaQty = Number(formicaQuantityPerUnit);
+      if (!Number.isFinite(formicaQty) || formicaQty <= 0) {
+        return res.status(400).json({
+          message: "כשנדרשת בחירת פורמייקה יש להזין כמות פורמייקה נדרשת ליחידה (גדולה מ־0)",
+        });
+      }
+      product.formicaQuantityPerUnit = formicaQty;
+    } else {
+      product.formicaQuantityPerUnit = 0;
+    }
+
+    product.needsHandleSelection =
+      needsHandleSelection === true || needsHandleSelection === "true";
+    if (product.needsHandleSelection) {
+      const handleQty = Number(handleQuantityPerUnit);
+      if (!Number.isFinite(handleQty) || handleQty <= 0) {
+        return res.status(400).json({
+          message: "כשנדרשת בחירת ידית יש להזין כמות ידיות נדרשת ליחידה (גדולה מ־0)",
+        });
+      }
+      product.handleQuantityPerUnit = handleQty;
+    } else {
+      product.handleQuantityPerUnit = 0;
+    }
+
     product.status = "WAITING_ADMIN_APPROVAL";
-    
+
     await product.save();
 
     res.json({ message: "Product characterized successfully", product });
@@ -319,8 +403,11 @@ export const createNewBaseProductByCarpenter = async (req, res) => {
       return res.status(409).json({ message: `חומר גלם בשם "${name}" כבר קיים` });
     }
 
+    const code = await nextMaterialCode("MAT");
+
     const product = await BaseProduct.create({
       name: name.trim(),
+      code,
       unit: unit.trim(),
       supplier: supplier?.trim() || "",
       description: description?.trim() || "",

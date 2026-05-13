@@ -56,11 +56,28 @@ export const getPendingDeliveries = async (req, res) => {
 
 export const claimMyDeliveries = async (req, res) => {
   try {
-    const { desiredHours } = req.body;
-    const run = await deliveryService.claimDeliveriesForToday(req.user.id, desiredHours);
+    const { desiredHours, startAddress, startLat, startLng } = req.body;
+    const startOverride = {};
+    const addr = startAddress != null ? String(startAddress).trim() : "";
+    if (addr) startOverride.address = addr;
+    const lat = Number(startLat);
+    const lng = Number(startLng);
+    if (Number.isFinite(lat) && Number.isFinite(lng)) {
+      startOverride.lat = lat;
+      startOverride.lng = lng;
+    }
+    const run = await deliveryService.claimDeliveriesForToday(
+      req.user.id,
+      desiredHours,
+      Object.keys(startOverride).length ? startOverride : null
+    );
     res.json({ message: "Deliveries claimed successfully", run });
   } catch (error) {
-    res.status(400).json({ message: error.message });
+    res.status(400).json({
+      message: error.message,
+      kind: error.kind || null,
+      minHoursNeeded: error.minHoursNeeded ?? null,
+    });
   }
 };
 
@@ -68,6 +85,31 @@ export const getMyTodayDeliveries = async (req, res) => {
   try {
     const run = await deliveryService.getDriverTodayRun(req.user.id);
     res.json(run || null);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+/**
+ * הובלות הנהג המחובר בחודש הנוכחי (DRIVER).
+ */
+export const getMyMonthlyDeliveries = async (req, res) => {
+  try {
+    const summary = await deliveryService.getDriverMonthlyDeliveries(req.user.id);
+    res.json(summary);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+/**
+ * הובלות נהג ספציפי בחודש הנוכחי (MANAGER).
+ */
+export const getDriverMonthlyDeliveriesById = async (req, res) => {
+  try {
+    const { driverId } = req.params;
+    const summary = await deliveryService.getDriverMonthlyDeliveries(driverId);
+    res.json(summary);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

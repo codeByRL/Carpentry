@@ -1,22 +1,58 @@
-import CatalogProduct from "../models/CatalogProduct.js";
+import CatalogProduct, { CATALOG_CATEGORIES } from "../models/CatalogProduct.js";
 import User from "../models/User.js";
 import Notification from "../models/Notification.js";
 import axios from "axios";
 import fs from "fs";
 import path from "path";
 
+const normalizeCategory = (rawValue) => {
+  const value = typeof rawValue === "string" ? rawValue.trim() : "";
+  if (!value) return null;
+  return CATALOG_CATEGORIES.includes(value) ? value : null;
+};
+
 // ─── יצירת מוצר חדש ───────────────────────────────────────────
 const createNewProduct = async (data, managerId, imagePath) => {
+  const category = normalizeCategory(data.category);
+  if (!category) {
+    throw new Error(
+      `יש לבחור קטגוריית מוצר חוקית מהרשימה: ${CATALOG_CATEGORIES.join(", ")}`
+    );
+  }
+  const carpenterId = data.carpenterId;
+  if (!carpenterId) {
+    throw new Error("יש לבחור נגר לאפיון לפני יצירת המוצר");
+  }
+  const carpenter = await User.findById(carpenterId);
+  if (!carpenter || carpenter.role !== "CARPENTER") {
+    throw new Error("נגר לא תקין");
+  }
+  // תמונה היא שדה חובה — הנגר חייב לראות מה הוא מאפיין.
+  const finalImage = imagePath || (typeof data.imageUrl === "string" ? data.imageUrl.trim() : "") || null;
+  if (!finalImage) {
+    throw new Error("יש להעלות תמונה למוצר (או לייצר תמונה עם AI) לפני שליחתו לאפיון");
+  }
   const product = new CatalogProduct({
     name: data.name,
+    category,
     description: data.description,
-    image: imagePath || data.imageUrl || null,
-    needsWoodSelection: data.needsWoodSelection === 'true' || data.needsWoodSelection === true,
-    needsFabricSelection: data.needsFabricSelection === 'true' || data.needsFabricSelection === true,
+    image: finalImage,
+    needsWoodSelection: false,
+    needsFabricSelection: false,
+    woodOptions: [],
+    fabricOptions: [],
     createdBy: managerId,
+    assignedCarpenter: carpenterId,
     status: "PENDING_CHARACTERIZATION",
   });
   await product.save();
+
+  await Notification.create({
+    user: carpenterId,
+    type: "INFO",
+    message: `התבקשת לאפיין את המוצר: ${product.name}`,
+  });
+
   return product;
 };
 
@@ -46,13 +82,51 @@ const characterizeProduct = async (productId, data) => {
   const product = await CatalogProduct.findById(productId);
   if (!product || product.status !== "PENDING_CHARACTERIZATION")
     throw new Error("מוצר לא זמין לאפיון");
+  if (!product.assignedCarpenter) {
+    throw new Error("למוצר לא שויך נגר — יש לשייך נגר לפני אפיון");
+  }
 
   product.baseProducts = data.baseProducts;
   product.estimatedWorkTime = data.estimatedWorkTime;
-  if (data.woodOptions) product.woodOptions = data.woodOptions;
-  if (data.fabricOptions) product.fabricOptions = data.fabricOptions;
-  if (typeof data.needsWoodSelection === "boolean") product.needsWoodSelection = data.needsWoodSelection;
-  if (typeof data.needsFabricSelection === "boolean") product.needsFabricSelection = data.needsFabricSelection;
+  product.woodOptions = [];
+  product.needsWoodSelection = false;
+
+  const fabricToggle = data.needsFabricSelection === true || data.needsFabricSelection === "true";
+  product.needsFabricSelection = fabricToggle;
+  if (fabricToggle) {
+    const qty = Number(data.fabricQuantityPerUnit);
+    if (!Number.isFinite(qty) || qty <= 0) {
+      throw new Error("כשנדרשת בחירת בד יש להזין כמות בד נדרשת ליחידה (גדולה מ־0)");
+    }
+    product.fabricQuantityPerUnit = qty;
+  } else {
+    product.fabricQuantityPerUnit = 0;
+  }
+
+  product.needsFormicaSelection =
+    data.needsFormicaSelection === true || data.needsFormicaSelection === "true";
+  if (product.needsFormicaSelection) {
+    const formicaQty = Number(data.formicaQuantityPerUnit);
+    if (!Number.isFinite(formicaQty) || formicaQty <= 0) {
+      throw new Error("כשנדרשת בחירת פורמייקה יש להזין כמות פורמייקה נדרשת ליחידה (גדולה מ־0)");
+    }
+    product.formicaQuantityPerUnit = formicaQty;
+  } else {
+    product.formicaQuantityPerUnit = 0;
+  }
+
+  product.needsHandleSelection =
+    data.needsHandleSelection === true || data.needsHandleSelection === "true";
+  if (product.needsHandleSelection) {
+    const handleQty = Number(data.handleQuantityPerUnit);
+    if (!Number.isFinite(handleQty) || handleQty <= 0) {
+      throw new Error("כשנדרשת בחירת ידית יש להזין כמות ידיות נדרשת ליחידה (גדולה מ־0)");
+    }
+    product.handleQuantityPerUnit = handleQty;
+  } else {
+    product.handleQuantityPerUnit = 0;
+  }
+
   product.status = "WAITING_ADMIN_APPROVAL";
   await product.save();
 
@@ -82,8 +156,111 @@ const approveProduct = async (productId, price) => {
 
 // ─── עריכת מוצר ───────────────────────────────────────────────
 const updateProduct = async (productId, updates, imagePath) => {
-  if (imagePath) updates.image = imagePath;
-  const product = await CatalogProduct.findByIdAndUpdate(productId, updates, { new: true });
+  // ⚠️ לעולם אל תיקח את שדה image מהבודי — multer מחזיר את הקובץ ב־req.file,
+  // וכל ערך אחר ב־req.body.image הוא זבל (לרוב אובייקט ריק שמגיע מ־FormData)
+  // שיגרום ל־Cast to string failed ב־Mongoose.
+  const { image: _ignoredImage, ...rest } = updates || {};
+  const payload = { ...rest };
+  if (imagePath) {
+    payload.image = imagePath;
+  } else if (typeof updates?.imageUrl === "string" && updates.imageUrl.trim()) {
+    payload.image = updates.imageUrl.trim();
+  }
+  delete payload.imageUrl;
+  if (payload.price === "" || payload.price === undefined) payload.price = null;
+  else if (payload.price != null) payload.price = Number(payload.price);
+  if (payload.estimatedWorkTime === "" || payload.estimatedWorkTime === undefined) {
+    payload.estimatedWorkTime = null;
+  } else if (payload.estimatedWorkTime != null) {
+    payload.estimatedWorkTime = Number(payload.estimatedWorkTime);
+  }
+  if (payload.category !== undefined) {
+    const normalized = normalizeCategory(payload.category);
+    if (!normalized) {
+      throw new Error(
+        `קטגוריה לא חוקית. בחר אחת מתוך: ${CATALOG_CATEGORIES.join(", ")}`
+      );
+    }
+    payload.category = normalized;
+  }
+
+  // נירמול דגלי בחירת בד וכמות הבד הנדרשת ליחידה.
+  if (payload.needsFabricSelection !== undefined) {
+    payload.needsFabricSelection =
+      payload.needsFabricSelection === true || payload.needsFabricSelection === "true";
+  }
+  if (payload.needsFabricSelection === false) {
+    payload.fabricQuantityPerUnit = 0;
+  } else if (payload.fabricQuantityPerUnit !== undefined) {
+    if (payload.fabricQuantityPerUnit === "" || payload.fabricQuantityPerUnit === null) {
+      payload.fabricQuantityPerUnit = 0;
+    } else {
+      const qty = Number(payload.fabricQuantityPerUnit);
+      if (!Number.isFinite(qty) || qty < 0) {
+        throw new Error("כמות בד ליחידה חייבת להיות מספר אי־שלילי");
+      }
+      payload.fabricQuantityPerUnit = qty;
+    }
+  }
+  if (payload.needsFabricSelection === true) {
+    const qty = Number(payload.fabricQuantityPerUnit || 0);
+    if (qty <= 0) {
+      throw new Error("כשמסומן 'דורש בחירת בד' יש להזין כמות בד נדרשת ליחידה (גדולה מ־0)");
+    }
+  }
+
+  if (payload.needsFormicaSelection !== undefined) {
+    payload.needsFormicaSelection =
+      payload.needsFormicaSelection === true || payload.needsFormicaSelection === "true";
+  }
+  if (payload.needsFormicaSelection === false) {
+    payload.formicaQuantityPerUnit = 0;
+  } else if (payload.formicaQuantityPerUnit !== undefined) {
+    if (payload.formicaQuantityPerUnit === "" || payload.formicaQuantityPerUnit === null) {
+      payload.formicaQuantityPerUnit = 0;
+    } else {
+      const qty = Number(payload.formicaQuantityPerUnit);
+      if (!Number.isFinite(qty) || qty < 0) {
+        throw new Error("כמות פורמייקה ליחידה חייבת להיות מספר אי־שלילי");
+      }
+      payload.formicaQuantityPerUnit = qty;
+    }
+  }
+  if (payload.needsFormicaSelection === true) {
+    const qty = Number(payload.formicaQuantityPerUnit || 0);
+    if (qty <= 0) {
+      throw new Error("כשמסומן 'דורש בחירת פורמייקה' יש להזין כמות פורמייקה נדרשת ליחידה (גדולה מ־0)");
+    }
+  }
+
+  if (payload.needsHandleSelection !== undefined) {
+    payload.needsHandleSelection =
+      payload.needsHandleSelection === true || payload.needsHandleSelection === "true";
+  }
+  if (payload.needsHandleSelection === false) {
+    payload.handleQuantityPerUnit = 0;
+  } else if (payload.handleQuantityPerUnit !== undefined) {
+    if (payload.handleQuantityPerUnit === "" || payload.handleQuantityPerUnit === null) {
+      payload.handleQuantityPerUnit = 0;
+    } else {
+      const qty = Number(payload.handleQuantityPerUnit);
+      if (!Number.isFinite(qty) || qty < 0) {
+        throw new Error("כמות ידיות ליחידה חייבת להיות מספר אי־שלילי");
+      }
+      payload.handleQuantityPerUnit = qty;
+    }
+  }
+  if (payload.needsHandleSelection === true) {
+    const qty = Number(payload.handleQuantityPerUnit || 0);
+    if (qty <= 0) {
+      throw new Error("כשמסומן 'דורש בחירת ידית' יש להזין כמות ידיות נדרשת ליחידה (גדולה מ־0)");
+    }
+  }
+
+  const product = await CatalogProduct.findByIdAndUpdate(productId, payload, {
+    new: true,
+    runValidators: true,
+  });
   if (!product) throw new Error("מוצר לא נמצא");
   return product;
 };

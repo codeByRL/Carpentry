@@ -16,6 +16,14 @@ const orderItemSchema = new Schema({
   selectedCustomization: {
     wood: chosenMaterialSchema,
     fabric: chosenMaterialSchema,
+    formica: {
+      formicaId: { type: Schema.Types.ObjectId, ref: "FormicaModel" },
+      code: String,
+      name: String,
+      image: String,
+      priceDelta: Number,
+    },
+    handle: chosenMaterialSchema,
     notes: String
   },
   itemPrice: Number

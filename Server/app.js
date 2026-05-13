@@ -19,6 +19,7 @@ import deliveryRouter from "./routes/deliveryRoutes.js";
 import warehousesRouter from "./routes/warehousesRoutes.js";
 import baseProductRouter from "./routes/baseProductRoute.js";
 import notificationRouter from "./routes/notificationRoute.js";
+import formicaRouter from "./routes/formicaRoute.js";
 
 dotenv.config();
 
@@ -120,6 +121,7 @@ app.use("/api/chat", authenticate, chatRouter);
 app.use("/api/manager", authenticate, managerAnalyticsRouter);
 app.use("/api/delivery", deliveryRouter);
 app.use("/api/notifications", authenticate, notificationRouter);
+app.use("/api/formica", authenticate, formicaRouter);
 
 // Health check
 app.get("/api/health", (req, res) => res.json({ status: "OK", timestamp: new Date() }));

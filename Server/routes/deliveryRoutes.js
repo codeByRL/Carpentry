@@ -8,6 +8,8 @@ import {
   getPendingDeliveries,
   claimMyDeliveries,
   getMyTodayDeliveries,
+  getMyMonthlyDeliveries,
+  getDriverMonthlyDeliveriesById,
 } from "../controllers/deliveryController.js";
 
 const router = express.Router();
@@ -20,5 +22,11 @@ router.post("/complete-stop", authorizeRoles("DRIVER"), markStopCompleted);
 router.get("/pending", authorizeRoles("DRIVER", "MANAGER"), getPendingDeliveries);
 router.post("/claim-my-today", authorizeRoles("DRIVER"), claimMyDeliveries);
 router.get("/my-today", authorizeRoles("DRIVER"), getMyTodayDeliveries);
+router.get("/my-month", authorizeRoles("DRIVER"), getMyMonthlyDeliveries);
+router.get(
+  "/driver/:driverId/this-month",
+  authorizeRoles("MANAGER"),
+  getDriverMonthlyDeliveriesById
+);
 
 export default router;

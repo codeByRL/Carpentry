@@ -33,7 +33,8 @@ const createProduct = async (req, res) => {
     const product = await createNewProduct(req.body, req.user.id, imagePath);
     res.status(201).json({ message: "המוצר נוצר", product });
   } catch (error) {
-    res.status(400).json({ message: error.message });
+    console.error("createProduct failed:", error?.message);
+    res.status(400).json({ message: error?.message || "שגיאה ביצירת מוצר" });
   }
 };
 

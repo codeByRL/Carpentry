@@ -17,7 +17,8 @@ const BaseProductSchema = new Schema({
 
   // שדות חדשים לחומר/בחירת חומר בהזמנה
   isMaterial: { type: Boolean, default: false },                      // האם הפריט משמש כחומר לבחירה (עץ/בד)
-  materialType: { type: String, enum: ['wood','fabric', null], default: null }, // סוג החומר
+  materialType: { type: String, enum: ['wood','fabric','formica','handle', null], default: null }, // סוג החומר
+  formicaModelId: { type: Schema.Types.ObjectId, ref: 'FormicaModel', default: null },
   priceDelta: { type: Number, default: 0 },                             // תוספת מחיר יחסית למחיר המוצר
 
   // תמונה ותיאור — אופציונליים

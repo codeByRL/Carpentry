@@ -1,5 +1,6 @@
 import Order from "../models/Order.js";
 import BaseProduct from "../models/BaseProduct.js";
+import { nextMaterialCode } from "../utils/materialCode.js";
 import PurchaseList from "../models/PurchaseList.js";
 
 const checkMaterialsAvailability = async (requiredMaterials) => {
@@ -128,8 +129,10 @@ const pickMaterial = async (orderId, materialId, warehouseUserId) => {
 };
 
 const createNewBaseProduct = async (data) => {
+  const code = await nextMaterialCode("MAT");
   const product = new BaseProduct({
     name: data.name,
+    code,
     unit: data.unit,
     quantity: data.quantity || 0,
     reservedQuantity: 0,
@@ -145,6 +148,14 @@ const createNewBaseProduct = async (data) => {
 };
 
 const generatePurchaseList = async () => {
+  const existing = await PurchaseList.find().lean();
+  const preservedByProduct = new Map(
+    existing.map((e) => [
+      String(e.product),
+      { status: e.status, sentAt: e.sentAt, arrivedAt: e.arrivedAt },
+    ])
+  );
+
   await PurchaseList.deleteMany({});
 
   const purchaseMap = {};
@@ -198,13 +209,19 @@ const generatePurchaseList = async () => {
   for (const [productId, data] of Object.entries(purchaseMap)) {
     const totalQuantity = data.forOrders + data.forStock;
 
+    const preserved = preservedByProduct.get(productId);
+    const keepSent =
+      preserved?.status === "SENT_TO_SUPPLIER" ? preserved : null;
+
     const item = new PurchaseList({
       product: productId,
       totalQuantityNeeded: totalQuantity,
       forOrders: data.forOrders,
       forStock: data.forStock,
-      supplierName: data.product.supplier || 'ללא ספק',  // ← חדש
-      status: 'PENDING',                                   // ← חדש
+      supplierName: data.product.supplier || "ללא ספק",
+      status: keepSent?.status || "PENDING",
+      sentAt: keepSent?.sentAt,
+      arrivedAt: keepSent?.arrivedAt,
     });
 
     await item.save();

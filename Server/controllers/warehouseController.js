@@ -1,9 +1,11 @@
 import * as warehouseService from "../services/warehouseService.js";
 import BaseProduct from "../models/BaseProduct.js";
+import FormicaModel from "../models/FormicaModel.js";
 import PurchaseList from "../models/PurchaseList.js";
 import Order from "../models/Order.js";
 import User from "../models/User.js";
 import { createNotification } from "../services/notificationService.js";
+import { nextMaterialCode, prefixForMaterialType } from "../utils/materialCode.js";
 import multer from "multer";
 import path from "path";
 import fs from "fs";
@@ -28,6 +30,37 @@ export const uploadBaseProductImage = multer({
   },
   limits: { fileSize: 8 * 1024 * 1024 },
 });
+
+const isTruthyMaterialFlag = (v) => v === true || v === "true";
+
+const validateCatalogMaterialFields = (fields, { requireImage, hasImage }) => {
+  if (!String(fields.name || "").trim()) return "שם הוא שדה חובה";
+  if (!String(fields.supplier || "").trim()) return "שם ספק הוא שדה חובה";
+  if (!String(fields.description || "").trim()) return "תיאור הוא שדה חובה";
+  if (
+    fields.priceDelta === undefined ||
+    fields.priceDelta === null ||
+    String(fields.priceDelta).trim() === "" ||
+    Number.isNaN(Number(fields.priceDelta))
+  ) {
+    return "תוספת מחיר היא שדה חובה";
+  }
+  if (requireImage && !hasImage) return "תמונה היא שדה חובה";
+  return null;
+};
+
+const syncLinkedFormicaModel = async (baseProduct, updates = {}) => {
+  if (!baseProduct?.formicaModelId) return;
+  const fm = {};
+  if (updates.name !== undefined) fm.name = updates.name;
+  if (updates.supplier !== undefined) fm.supplier = updates.supplier;
+  if (updates.description !== undefined) fm.description = updates.description;
+  if (updates.priceDelta !== undefined) fm.priceDelta = updates.priceDelta;
+  if (updates.image !== undefined) fm.image = updates.image;
+  if (Object.keys(fm).length) {
+    await FormicaModel.findByIdAndUpdate(baseProduct.formicaModelId, fm);
+  }
+};
 
 export const getOrderStatus = async (req, res) => {
   try {
@@ -141,26 +174,28 @@ export const createBaseProduct = async (req, res) => {
       return res.status(409).json({ error: `מוצר בשם "${name}" כבר קיים במערכת` });
     }
 
-    const nextCodeByPrefix = async (prefix) => {
-      const regex = new RegExp(`^${prefix}-\\d+$`, "i");
-      const existingCodes = await BaseProduct.find({ code: regex }).select("code").lean();
-      const maxNum = existingCodes.reduce((max, item) => {
-        const matched = item.code?.match(new RegExp(`^${prefix}-(\\d+)$`, "i"));
-        const current = matched ? Number(matched[1]) : 0;
-        return current > max ? current : max;
-      }, 0);
-      return `${prefix}-${String(maxNum + 1).padStart(4, "0")}`;
-    };
-
-    const isFabricMaterial = (isMaterial === true || isMaterial === "true") && materialType === "fabric";
-    // קוד אוטומטי לכל מוצר בסיס שמתווסף ע"י מחסנאי
-    const autoCode = isFabricMaterial
-      ? await nextCodeByPrefix("FAB")
-      : await nextCodeByPrefix("MAT");
+    const isFabricMaterial = isTruthyMaterialFlag(isMaterial) && materialType === "fabric";
+    const isFormicaMaterial = isTruthyMaterialFlag(isMaterial) && materialType === "formica";
+    const isHandleMaterial = isTruthyMaterialFlag(isMaterial) && materialType === "handle";
+    const isCatalogMaterial = isFabricMaterial || isFormicaMaterial || isHandleMaterial;
 
     const imagePath = req.file
       ? `/${req.file.path.replace(/\\/g, "/")}`
       : image;
+
+    if (isCatalogMaterial) {
+      const validationError = validateCatalogMaterialFields(
+        { name, supplier, description, priceDelta },
+        { requireImage: true, hasImage: !!imagePath }
+      );
+      if (validationError) return res.status(400).json({ error: validationError });
+    }
+
+    let autoCode;
+    if (isFabricMaterial) autoCode = await nextMaterialCode("FAB");
+    else if (isFormicaMaterial) autoCode = await nextMaterialCode("FOR");
+    else if (isHandleMaterial) autoCode = await nextMaterialCode("HND");
+    else autoCode = await nextMaterialCode(prefixForMaterialType(materialType));
 
     const product = await BaseProduct.create({
       name: name.trim(),
@@ -189,6 +224,19 @@ export const createBaseProduct = async (req, res) => {
       );
     }
 
+    if (isHandleMaterial) {
+      const warehouseUsers = await User.find({ role: "WAREHOUSE" }).select("_id").lean();
+      await Promise.all(
+        warehouseUsers.map((w) =>
+          createNotification(
+            w._id,
+            `נוספה ידית חדשה (${product.name}, דגם ${product.code}) - נדרשת אספקה ראשונית`,
+            "INFO"
+          )
+        )
+      );
+    }
+
     res.status(201).json(product);
   } catch (error) {
     res.status(400).json({ error: error.message });
@@ -204,9 +252,33 @@ export const updateBaseProduct = async (req, res) => {
       priceDelta, image, description, confirmNewProduct
     } = req.body;
 
-    const nextQuantity = Number(quantity || 0);
-    const existing = await BaseProduct.findById(baseProductId).select("reservedQuantity");
+    const existing = await BaseProduct.findById(baseProductId);
     if (!existing) return res.status(404).json({ error: 'מוצר לא נמצא' });
+
+    const nextImage = req.file
+      ? `/${req.file.path.replace(/\\/g, "/")}`
+      : image !== undefined
+        ? image
+        : existing.image;
+
+    const isCatalogMaterial =
+      isTruthyMaterialFlag(existing.isMaterial) &&
+      ["fabric", "formica", "handle"].includes(String(existing.materialType || ""));
+
+    if (isCatalogMaterial) {
+      const validationError = validateCatalogMaterialFields(
+        {
+          name: name !== undefined ? name : existing.name,
+          supplier: supplier !== undefined ? supplier : existing.supplier,
+          description: description !== undefined ? description : existing.description,
+          priceDelta: priceDelta !== undefined ? priceDelta : existing.priceDelta,
+        },
+        { requireImage: true, hasImage: !!nextImage }
+      );
+      if (validationError) return res.status(400).json({ error: validationError });
+    }
+
+    const nextQuantity = Number(quantity ?? existing.quantity ?? 0);
     const normalizedReserved = Math.min(
       Math.max(Number(existing.reservedQuantity || 0), 0),
       Math.max(nextQuantity, 0)
@@ -214,13 +286,21 @@ export const updateBaseProduct = async (req, res) => {
 
     const isConfirmNew = !!confirmNewProduct;
     const updatePayload = {
-      name, code, unit,
-      // באישור מוצר חדש: הכמות בטופס היא כמות להזמנה ראשונית (לא מלאי קיים)
-      quantity: isConfirmNew ? 0 : quantity,
-      minStock, reorderQuantity,
-      shelfLocation, supplier, isMaterial,
-      materialType: isMaterial ? materialType : null,
-      priceDelta, image, description,
+      name: name !== undefined ? name : existing.name,
+      code: code !== undefined ? code : existing.code,
+      unit: unit !== undefined ? unit : existing.unit,
+      quantity: isConfirmNew ? 0 : (quantity !== undefined ? quantity : existing.quantity),
+      minStock: minStock !== undefined ? minStock : existing.minStock,
+      reorderQuantity: reorderQuantity !== undefined ? reorderQuantity : existing.reorderQuantity,
+      shelfLocation: shelfLocation !== undefined ? shelfLocation : existing.shelfLocation,
+      supplier: supplier !== undefined ? supplier : existing.supplier,
+      isMaterial: isMaterial !== undefined ? isMaterial : existing.isMaterial,
+      materialType: (isMaterial !== undefined ? isMaterial : existing.isMaterial)
+        ? (materialType !== undefined ? materialType : existing.materialType)
+        : null,
+      priceDelta: priceDelta !== undefined ? Number(priceDelta) || 0 : existing.priceDelta,
+      image: nextImage,
+      description: description !== undefined ? description : existing.description,
       reservedQuantity: normalizedReserved,
       ...(isConfirmNew ? { isNew: false, pendingInitialSupplyQty: Math.max(nextQuantity, 0) } : {}),
     };
@@ -230,6 +310,8 @@ export const updateBaseProduct = async (req, res) => {
       updatePayload,
       { new: true, runValidators: true }
     );
+
+    await syncLinkedFormicaModel(product, updatePayload);
 
     if (isConfirmNew) {
       // שומרים שורת רכש ראשונית ייעודית עד הגעת הסחורה בפועל
