@@ -21,6 +21,11 @@ import { fetchActiveChatPartners } from '../store/slices/chatSlice';
 import API from '../services/api';
 import PageHeader from '../components/PageHeader.jsx';
 import { dashboardStatColor } from '../utils/dashboardStatPalette.js';
+import {
+  HandleSurchargeLabel,
+  materialSurchargeForProductText,
+} from '../utils/handlePriceLabel.jsx';
+import { materialDeltaForProductUnit } from '../utils/materialPricing.js';
 
 // === קבועים ===
 const STATUS_LABEL = {
@@ -288,15 +293,15 @@ const SalesDashboard = () => {
     let delta = 0;
     if (productRequiresFabricSelection(item, p) && item.selectedFabric) {
       const f = fabricMaterials.find((m) => m._id === item.selectedFabric);
-      delta += Number(f?.priceDelta || 0);
+      delta += materialDeltaForProductUnit(f?.priceDelta, p, 'fabric');
     }
     if (productRequiresFormicaSelection(item, p) && item.selectedFormica) {
       const fm = formicaModels.find((m) => m._id === item.selectedFormica);
-      delta += Number(fm?.priceDelta || 0);
+      delta += materialDeltaForProductUnit(fm?.priceDelta, p, 'formica');
     }
     if (productRequiresHandleSelection(item, p) && item.selectedHandle) {
       const h = handleMaterials.find((m) => m._id === item.selectedHandle);
-      delta += Number(h?.priceDelta || 0);
+      delta += materialDeltaForProductUnit(h?.priceDelta, p, 'handle');
     }
     return Number(p.price || 0) + delta;
   };
@@ -759,57 +764,141 @@ const SalesDashboard = () => {
                     >
                       {filteredModels.map((model) => <MenuItem key={model._id} value={model._id}>{model.name}</MenuItem>)}
                     </TextField>
-                    {productRequiresFabricSelection(item, selectedProduct) && (
+                    {productRequiresFabricSelection(item, selectedProduct) && (() => {
+                      const selectedFabricMat = fabricMaterials.find((m) => m._id === item.selectedFabric);
+                      const fabricHint = materialSurchargeForProductText(
+                        selectedFabricMat?.priceDelta,
+                        selectedProduct,
+                        'fabric'
+                      );
+                      return (
                       <Autocomplete
                         options={getFabricOptionsForItem()}
                         getOptionLabel={(m) => `${m.name}${m.code ? ` (${m.code})` : ''}`}
-                        value={fabricMaterials.find((m) => m._id === item.selectedFabric) || null}
+                        value={selectedFabricMat || null}
                         onChange={(_, val) => handleOrderItemChange(idx, 'selectedFabric', val?._id || '')}
+                        renderOption={(props, m) => (
+                          <Box component="li" {...props} key={m._id}>
+                            <Box>
+                              <Typography sx={{ fontWeight: 600 }}>
+                                {m.name}{m.code ? ` (${m.code})` : ''}
+                              </Typography>
+                              <HandleSurchargeLabel priceDelta={m.priceDelta} materialType="fabric" sx={{ mt: 0.25 }} />
+                            </Box>
+                          </Box>
+                        )}
                         renderInput={(params) => (
                           <TextField
                             {...params}
                             label="בחירת בד *"
                             error={!!orderFormErrors[`selectedFabric_${idx}`]}
-                            helperText={orderFormErrors[`selectedFabric_${idx}`] || ''}
+                            helperText={
+                              orderFormErrors[`selectedFabric_${idx}`] ? (
+                                orderFormErrors[`selectedFabric_${idx}`]
+                              ) : fabricHint ? (
+                                <Typography component="span" sx={{ fontWeight: 700, color: 'secondary.dark' }}>
+                                  {fabricHint}
+                                </Typography>
+                              ) : (
+                                ''
+                              )
+                            }
                           />
                         )}
                         isOptionEqualToValue={(opt, val) => opt._id === val._id}
                       />
-                    )}
-                    {productRequiresFormicaSelection(item, selectedProduct) && (
+                      );
+                    })()}
+                    {productRequiresFormicaSelection(item, selectedProduct) && (() => {
+                      const selectedFormicaMat = formicaModels.find((m) => m._id === item.selectedFormica);
+                      const formicaHint = materialSurchargeForProductText(
+                        selectedFormicaMat?.priceDelta,
+                        selectedProduct,
+                        'formica'
+                      );
+                      return (
                       <Autocomplete
                         options={formicaModels}
                         getOptionLabel={(m) => `${m.name}${m.code ? ` (${m.code})` : ''}`}
-                        value={formicaModels.find((m) => m._id === item.selectedFormica) || null}
+                        value={selectedFormicaMat || null}
                         onChange={(_, val) => handleOrderItemChange(idx, 'selectedFormica', val?._id || '')}
+                        renderOption={(props, m) => (
+                          <Box component="li" {...props} key={m._id}>
+                            <Box>
+                              <Typography sx={{ fontWeight: 600 }}>
+                                {m.name}{m.code ? ` (${m.code})` : ''}
+                              </Typography>
+                              <HandleSurchargeLabel priceDelta={m.priceDelta} materialType="formica" sx={{ mt: 0.25 }} />
+                            </Box>
+                          </Box>
+                        )}
                         renderInput={(params) => (
                           <TextField
                             {...params}
                             label="בחירת פורמייקה *"
                             error={!!orderFormErrors[`selectedFormica_${idx}`]}
-                            helperText={orderFormErrors[`selectedFormica_${idx}`] || ''}
+                            helperText={
+                              orderFormErrors[`selectedFormica_${idx}`] ? (
+                                orderFormErrors[`selectedFormica_${idx}`]
+                              ) : formicaHint ? (
+                                <Typography component="span" sx={{ fontWeight: 700, color: 'secondary.dark' }}>
+                                  {formicaHint}
+                                </Typography>
+                              ) : (
+                                ''
+                              )
+                            }
                           />
                         )}
                         isOptionEqualToValue={(opt, val) => opt._id === val._id}
                       />
-                    )}
-                    {productRequiresHandleSelection(item, selectedProduct) && (
+                      );
+                    })()}
+                    {productRequiresHandleSelection(item, selectedProduct) && (() => {
+                      const selectedHandleMat = handleMaterials.find((m) => m._id === item.selectedHandle);
+                      const surchargeHint = materialSurchargeForProductText(
+                        selectedHandleMat?.priceDelta,
+                        selectedProduct,
+                        'handle'
+                      );
+                      return (
                       <Autocomplete
                         options={handleMaterials}
                         getOptionLabel={(m) => `${m.name}${m.code ? ` (${m.code})` : ''}`}
-                        value={handleMaterials.find((m) => m._id === item.selectedHandle) || null}
+                        value={selectedHandleMat || null}
                         onChange={(_, val) => handleOrderItemChange(idx, 'selectedHandle', val?._id || '')}
+                        renderOption={(props, m) => (
+                          <Box component="li" {...props} key={m._id}>
+                            <Box>
+                              <Typography sx={{ fontWeight: 600 }}>
+                                {m.name}{m.code ? ` (${m.code})` : ''}
+                              </Typography>
+                              <HandleSurchargeLabel priceDelta={m.priceDelta} materialType="handle" sx={{ mt: 0.25 }} />
+                            </Box>
+                          </Box>
+                        )}
                         renderInput={(params) => (
                           <TextField
                             {...params}
                             label="בחירת ידית *"
                             error={!!orderFormErrors[`selectedHandle_${idx}`]}
-                            helperText={orderFormErrors[`selectedHandle_${idx}`] || ''}
+                            helperText={
+                              orderFormErrors[`selectedHandle_${idx}`] ? (
+                                orderFormErrors[`selectedHandle_${idx}`]
+                              ) : surchargeHint ? (
+                                <Typography component="span" sx={{ fontWeight: 700, color: 'secondary.dark' }}>
+                                  {surchargeHint}
+                                </Typography>
+                              ) : (
+                                ''
+                              )
+                            }
                           />
                         )}
                         isOptionEqualToValue={(opt, val) => opt._id === val._id}
                       />
-                    )}
+                      );
+                    })()}
                     <TextField
                       label="כמות"
                       type="number"

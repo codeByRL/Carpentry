@@ -45,6 +45,22 @@ const STATUS_LABEL = {
 };
 
 const WOOD_COLOR = '#D2691E';
+
+/** כפתור contained על רקע חום/כתום — טקסט לבן לקריאות */
+const containedWoodBtnSx = {
+  bgcolor: WOOD_COLOR,
+  color: '#fff !important',
+  fontSize: 12,
+  borderRadius: 2,
+  '&:hover': { bgcolor: '#A0522D', color: '#fff !important' },
+};
+
+const containedBrownBtnSx = {
+  bgcolor: '#6D4C41',
+  color: '#fff !important',
+  '&:hover': { bgcolor: '#4E342E', color: '#fff !important' },
+  '& .MuiSvgIcon-root': { color: 'inherit' },
+};
 const DARK      = '#3E2723';
 const LIGHT_BG  = '#FBF0E9';
 const BORDER    = '#E8C9B0';
@@ -774,7 +790,7 @@ const CatalogPage = () => {
                       </Button>
                       <Button size="small" variant="contained" startIcon={<AddIcon sx={{ fontSize: 14 }} />}
                         onClick={item.onAdd}
-                        sx={{ fontSize: 11, borderRadius: 1.5, bgcolor: '#6D4C41', '&:hover': { bgcolor: '#4E342E' } }}>
+                        sx={{ ...containedBrownBtnSx, fontSize: 11, borderRadius: 1.5 }}>
                         הוסף
                       </Button>
                     </Box>
@@ -903,7 +919,7 @@ const CatalogPage = () => {
                       size="small"
                       fullWidth
                       variant="contained"
-                      sx={{ mt: 1, bgcolor: '#A0522D', '&:hover': { bgcolor: '#8B4513' }, fontSize: 11.5 }}
+                      sx={{ mt: 1, bgcolor: '#A0522D', color: '#fff', '&:hover': { bgcolor: '#8B4513', color: '#fff' }, fontSize: 11.5 }}
                       onClick={() => {
                         setAssignOrphanProduct(p);
                         setAssignOrphanCarpenterId('');
@@ -1018,9 +1034,8 @@ const CatalogPage = () => {
                 sx={{ flex: 1, '& .MuiInputBase-root': { fontSize: 12 } }} />
               <Button size="small" variant="contained" startIcon={<AutoAwesomeIcon />}
                 disabled={imageLoading || !aiPrompt.trim()} onClick={handleGenerateAI}
-                sx={{ bgcolor: '#6D4C41', fontSize: 11, borderRadius: 2, whiteSpace: 'nowrap',
-                  '&:hover': { bgcolor: '#4E342E' } }}>
-                {imageLoading ? <CircularProgress size={14} sx={{ color: 'white' }} /> : 'AI'}
+                sx={{ ...containedBrownBtnSx, fontSize: 11, borderRadius: 2, whiteSpace: 'nowrap' }}>
+                {imageLoading ? <CircularProgress size={14} sx={{ color: '#fff' }} /> : 'AI'}
               </Button>
             </Box>
             {submitError && submitError.includes && submitError.includes('נטפרי') && (
@@ -1057,7 +1072,7 @@ const CatalogPage = () => {
           <Button variant="contained"
             disabled={submitLoading || !newForm.name || !newForm.category || !newForm.carpenterId || (!imageFile && !generatedImageUrl)}
             onClick={handleCreateSubmit}
-            sx={{ bgcolor: WOOD_COLOR, fontSize: 12, borderRadius: 2, '&:hover': { bgcolor: '#A0522D' } }}>
+            sx={containedWoodBtnSx}>
             {submitLoading ? <CircularProgress size={16} sx={{ color: 'white' }} /> : 'שלח לאפיון'}
           </Button>
         </DialogActions>
@@ -1106,9 +1121,9 @@ const CatalogPage = () => {
             variant="contained"
             disabled={assignOrphanLoading || !assignOrphanCarpenterId}
             onClick={handleAssignOrphanSubmit}
-            sx={{ bgcolor: WOOD_COLOR, fontSize: 12, borderRadius: 2, '&:hover': { bgcolor: '#A0522D' } }}
+            sx={containedWoodBtnSx}
           >
-            {assignOrphanLoading ? <CircularProgress size={16} sx={{ color: 'white' }} /> : 'שייך נגר'}
+            {assignOrphanLoading ? <CircularProgress size={16} sx={{ color: '#fff' }} /> : 'שייך נגר'}
           </Button>
         </DialogActions>
       </Dialog>
@@ -1254,7 +1269,7 @@ const CatalogPage = () => {
         <DialogActions sx={{ px: 3, pb: 2 }}>
           <Button onClick={() => { dispatch(clearCatalogSubmitError()); setEditValidationError(''); setEditProduct(null); }} sx={{ color: '#A1887F', fontSize: 12 }}>ביטול</Button>
           <Button variant="contained" disabled={submitLoading} onClick={handleEditSubmit}
-            sx={{ bgcolor: WOOD_COLOR, fontSize: 12, borderRadius: 2, '&:hover': { bgcolor: '#A0522D' } }}>
+            sx={containedWoodBtnSx}>
             {submitLoading ? <CircularProgress size={16} sx={{ color: 'white' }} /> : 'שמור שינויים'}
           </Button>
         </DialogActions>
@@ -1434,7 +1449,7 @@ const CatalogPage = () => {
             variant="contained"
             disabled={!newFabricForm.name.trim()}
             onClick={handleCreateFabric}
-            sx={{ bgcolor: WOOD_COLOR, fontSize: 12, borderRadius: 2, '&:hover': { bgcolor: '#A0522D' } }}
+            sx={containedWoodBtnSx}
           >
             שמור בד חדש
           </Button>
@@ -1466,7 +1481,7 @@ const CatalogPage = () => {
         <DialogActions sx={{ px: 3, pb: 2 }}>
           <Button onClick={() => setShowFormicaForm(false)} sx={{ color: '#A1887F', fontSize: 12 }}>ביטול</Button>
           <Button variant="contained" disabled={!newFormicaForm.name.trim()} onClick={handleCreateFormica}
-            sx={{ bgcolor: '#5D4037', fontSize: 12, borderRadius: 2, '&:hover': { bgcolor: '#3E2723' } }}>
+            sx={{ bgcolor: '#5D4037', color: '#fff', fontSize: 12, borderRadius: 2, '&:hover': { bgcolor: '#3E2723', color: '#fff' } }}>
             שמור דגם פורמייקה
           </Button>
         </DialogActions>
@@ -1624,6 +1639,11 @@ const CatalogPage = () => {
                     </Box>
                     <Typography sx={{ fontSize: 13, fontWeight: 700, color: DARK }}>{f.name}</Typography>
                     <Typography sx={{ fontSize: 11.5, color: '#8D6E63' }}>קוד: {f.code || '—'}</Typography>
+                    {Number(f.priceDelta) > 0 && (
+                      <Typography sx={{ fontSize: 12, fontWeight: 700, color: '#D2691E', mt: 0.5 }}>
+                        תוספת {Number(f.priceDelta).toLocaleString('he-IL')} ש&quot;ח למטר
+                      </Typography>
+                    )}
                   </Paper>
                 </Grid>
               ))}
@@ -1676,7 +1696,7 @@ const CatalogPage = () => {
         <DialogActions sx={{ px: 3, pb: 2 }}>
           <Button onClick={() => setMaterialEdit(null)} sx={{ color: '#A1887F', fontSize: 12 }}>ביטול</Button>
           <Button variant="contained" disabled={materialEditSaving} onClick={handleSaveMaterialEdit}
-            sx={{ bgcolor: WOOD_COLOR, fontSize: 12, borderRadius: 2, '&:hover': { bgcolor: '#A0522D' } }}>
+            sx={containedWoodBtnSx}>
             {materialEditSaving ? <CircularProgress size={16} sx={{ color: 'white' }} /> : 'שמור'}
           </Button>
         </DialogActions>

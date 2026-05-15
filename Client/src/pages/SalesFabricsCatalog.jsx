@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Box, Typography, Grid, Paper, Alert, CircularProgress } from '@mui/material';
 import API from '../services/api';
 import PageHeader from '../components/PageHeader.jsx';
+import { HandleSurchargeLabel } from '../utils/handlePriceLabel.jsx';
 
 const BASE_URL = import.meta.env.VITE_REACT_APP_API_URL || 'http://localhost:5001';
 
@@ -66,6 +67,7 @@ const SalesFabricsCatalog = () => {
                 </Box>
                 <Typography sx={{ fontWeight: 700 }}>{f.name}</Typography>
                 <Typography sx={{ fontSize: 12, color: '#7B6A5F' }}>{f.code || 'ללא קוד'}</Typography>
+                <HandleSurchargeLabel priceDelta={f.priceDelta} materialType="fabric" />
               </Paper>
             </Grid>
           ))}

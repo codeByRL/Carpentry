@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useLocation } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import PersonAddIcon from '@mui/icons-material/PersonAdd';
 import VisibilityIcon from '@mui/icons-material/Visibility';
@@ -89,6 +90,7 @@ const TabPanel = ({ children, value, index }) => (
 );
 
 const Employees = () => {
+  const location = useLocation();
   const dispatch = useDispatch();
   const { showSuccess, showError, FeedbackSnackbar } = useFeedbackSnackbar();
   const {
@@ -163,6 +165,15 @@ const Employees = () => {
 
   const handleClose = () => { setOpen(false); setErrors({}); dispatch(clearSubmitError()); };
 
+  useEffect(() => {
+    const editId = location.state?.editEmployeeId;
+    if (!editId || loading || employees.length === 0) return;
+    const emp = employees.find((e) => e._id === editId);
+    if (emp) handleOpenEdit(emp);
+    window.history.replaceState({}, document.title);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.state?.editEmployeeId, loading, employees]);
+
   const handleChange = (field = '') => (e) => { // ברירת מחדל ל-'' כדי למנוע שגיאה
     setFormData({ ...formData, [field]: e.target.value });
     if (errors[field]) setErrors({ ...errors, [field]: '' });
@@ -214,13 +225,13 @@ const Employees = () => {
   const openEmployeeView = (emp) => {
     setViewEmployee(emp);
     setViewOpen(true);
-    if (emp?.role === 'CARPENTER' || emp?.role === 'WAREHOUSE') {
+    if (emp?.role === 'CARPENTER') {
       dispatch(fetchEmployeeActiveOrders(emp._id));
     }
   };
 
   const openEmployeeOrdersSpec = (emp) => {
-    if (emp?.role !== 'CARPENTER' && emp?.role !== 'SALES') return;
+    if (emp?.role !== 'CARPENTER' && emp?.role !== 'SALES' && emp?.role !== 'WAREHOUSE') return;
     setOrdersSpecEmployee(emp);
     setOrdersSpecOpen(true);
     dispatch(fetchEmployeeActiveOrders(emp._id));
@@ -238,11 +249,15 @@ const Employees = () => {
     TO_CUSTOMER: 'הובלה לבית הלקוח',
   };
 
-  const getRoleColor  = (role) => ({ MANAGER: 'error', CARPENTER: 'primary', WAREHOUSE: 'warning', SALES: 'success', DRIVER: 'info' }[role] || 'default');
   const getRoleLabel  = (role) => ({ MANAGER: 'מנהל', CARPENTER: 'נגר', WAREHOUSE: 'מחסנאי', SALES: 'מכירות', DRIVER: 'מוביל' }[role] || role);
+  const RoleChip = ({ role }) => (
+    <Chip label={getRoleLabel(role)} color="secondary" size="small" variant="outlined" />
+  );
+
+  const tableEmployees = employees.filter((emp) => emp.role !== 'MANAGER');
   const getEmploymentLabel = (type) => ({ FULL_TIME: 'משרה מלאה', PART_TIME: 'חלקית', FREELANCE: 'פרילנס' }[type] || '-');
 
-  const filteredEmployees = employees
+  const filteredEmployees = tableEmployees
     .filter(emp => {
       if (filterName && !emp.fullName?.toLowerCase().includes(filterName.toLowerCase())) return false;
       if (filterRole && emp.role !== filterRole) return false;
@@ -300,7 +315,6 @@ const Employees = () => {
             <MenuItem key="WAREHOUSE" value="WAREHOUSE">מחסנאי</MenuItem>
             <MenuItem key="SALES" value="SALES">מכירות</MenuItem>
             <MenuItem key="DRIVER" value="DRIVER">מוביל</MenuItem>
-            <MenuItem key="MANAGER" value="MANAGER">מנהל</MenuItem>
           </TextField>
           <TextField select size="small" label="סוג העסקה" value={filterEmployment}
             onChange={e => setFilterEmployment(e.target.value)} sx={{ minWidth: { xs: '100%', sm: 150 }, flex: { xs: '1 1 100%', sm: '0 1 auto' } }}>
@@ -332,7 +346,7 @@ const Employees = () => {
             </Button>
           )}
           <Typography variant="caption" color="text.secondary" sx={{ width: { xs: '100%', sm: 'auto' }, textAlign: { xs: 'center', sm: 'inherit' }, mr: { sm: 'auto' } }}>
-            {filteredEmployees.length} / {employees.length} עובדים
+            {filteredEmployees.length} / {tableEmployees.length} עובדים
           </Typography>
         </Box>
       </Paper>
@@ -360,7 +374,7 @@ const Employees = () => {
                 <TableCell>סוג העסקה</TableCell>
                 <TableCell>עומס (נגרים)</TableCell>
                 <TableCell>מחסן</TableCell>
-                <TableCell align="center">פעולות</TableCell>
+                <TableCell align="right">פעולות</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -368,7 +382,7 @@ const Employees = () => {
                 // נוסף key
                 <TableRow key="no-employees"> 
                   <TableCell colSpan={8} align="center" sx={{ py: 6, color: 'text.secondary' }}>
-                    {employees.length === 0 ? 'אין עובדים במערכת עדיין' : 'לא נמצאו עובדים התואמים את הסינון'}
+                    {tableEmployees.length === 0 ? 'אין עובדים במערכת עדיין' : 'לא נמצאו עובדים התואמים את הסינון'}
                   </TableCell>
                 </TableRow>
               ) : filteredEmployees.map((emp) => (
@@ -383,7 +397,7 @@ const Employees = () => {
                     </Box>
                   </TableCell>
                   <TableCell>
-                    <Chip label={getRoleLabel(emp.role)} color={getRoleColor(emp.role)} size="small" variant="outlined" />
+                    <RoleChip role={emp.role} />
                   </TableCell>
                   <TableCell>{emp.phone || '-'}</TableCell>
                   <TableCell>{emp.email}</TableCell>
@@ -404,11 +418,11 @@ const Employees = () => {
                   <TableCell>
                     {emp.role === 'WAREHOUSE' && emp.warehouse?.name ? emp.warehouse.name : '-'}
                   </TableCell>
-                  <TableCell align="center" sx={{ verticalAlign: 'middle', py: 1, width: 1, minWidth: 200 }}>
+                  <TableCell align="right" sx={{ verticalAlign: 'middle', py: 1, width: 1, minWidth: 200 }}>
                     <Box
                       sx={{
                         display: 'flex',
-                        justifyContent: 'center',
+                        justifyContent: 'flex-start',
                         alignItems: 'center',
                         flexWrap: 'nowrap',
                         gap: 0.25,
@@ -424,12 +438,14 @@ const Employees = () => {
                           <VisibilityIcon sx={{ fontSize: 20 }} />
                         </IconButton>
                       </Tooltip>
-                      {(emp.role === 'CARPENTER' || emp.role === 'SALES' || emp.role === 'DRIVER') ? (
+                      {(emp.role === 'CARPENTER' || emp.role === 'SALES' || emp.role === 'DRIVER' || emp.role === 'WAREHOUSE') ? (
                         <Tooltip
                           title={
                             emp.role === 'DRIVER'
                               ? 'הובלות שביצע החודש'
-                              : 'מפרט הזמנות פעילות'
+                              : emp.role === 'WAREHOUSE'
+                                ? 'חבילות ממתינות לליקוט ולאספקה'
+                                : 'מפרט הזמנות פעילות'
                           }
                         >
                           <IconButton
@@ -587,6 +603,9 @@ const Employees = () => {
           {formData.role === 'WAREHOUSE' && (
             <TabPanel value={tab} index={4}>
               <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <Alert severity="info" sx={{ fontSize: 13 }}>
+                  לעריכת שם/כתובת של המחסן עצמו: תפריט «סטטוס מחסן» → «ניהול מחסנים».
+                </Alert>
                 {renderField("בחר מחסן מקושר *", "warehouse", "text", {
                   helperTextOverride: "המחסן שהמחסנאי אחראי עליו",
                   children: warehouses.length === 0 
@@ -648,7 +667,7 @@ const Employees = () => {
                   <Typography color="text.secondary" sx={{ textAlign: 'start' }}>{value}</Typography>
                 </Box>
               ))}
-              {(viewEmployee.role === 'CARPENTER' || viewEmployee.role === 'WAREHOUSE') && (
+              {viewEmployee.role === 'CARPENTER' && (
                 <Box sx={{ mt: 1 }}>
                   <Divider sx={{ mb: 1.5 }}>הזמנות פעילות</Divider>
                   {activeOrdersLoadingByEmployee[viewEmployee._id] ? (
@@ -671,7 +690,9 @@ const Employees = () => {
                           {(employeeActiveOrders[viewEmployee._id] || []).length === 0 ? (
                             <TableRow>
                               <TableCell colSpan={5} align="center" sx={{ py: 2.5, color: 'text.secondary' }}>
-                                אין הזמנות פעילות לעובד זה
+                                {viewEmployee?.role === 'WAREHOUSE'
+                                  ? 'אין חבילות ממתינות לליקוט או לאספקה'
+                                  : 'אין הזמנות פעילות לעובד זה'}
                               </TableCell>
                             </TableRow>
                           ) : (
@@ -726,7 +747,9 @@ const Employees = () => {
 
       <Dialog open={ordersSpecOpen} onClose={() => setOrdersSpecOpen(false)} fullWidth maxWidth="md">
         <DialogTitle sx={{ fontWeight: 'bold', color: '#5D4037' }}>
-          📋 מפרט הזמנות פעילות — {ordersSpecEmployee?.fullName || ''}
+          {ordersSpecEmployee?.role === 'WAREHOUSE'
+            ? `📦 חבילות ממתינות לליקוט ולאספקה — ${ordersSpecEmployee?.fullName || ''}`
+            : `📋 מפרט הזמנות פעילות — ${ordersSpecEmployee?.fullName || ''}`}
         </DialogTitle>
         <DialogContent dividers>
           {!ordersSpecEmployee ? null : (
@@ -750,7 +773,9 @@ const Employees = () => {
                     {(employeeActiveOrders[ordersSpecEmployee._id] || []).length === 0 ? (
                       <TableRow>
                         <TableCell colSpan={5} align="center" sx={{ py: 2.5, color: 'text.secondary' }}>
-                          אין הזמנות פעילות לעובד זה
+                          {ordersSpecEmployee?.role === 'WAREHOUSE'
+                            ? 'אין חבילות ממתינות לליקוט או לאספקה'
+                            : 'אין הזמנות פעילות לעובד זה'}
                         </TableCell>
                       </TableRow>
                     ) : (

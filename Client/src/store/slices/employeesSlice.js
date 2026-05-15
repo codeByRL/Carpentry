@@ -74,6 +74,33 @@ export const deleteEmployee = createAsyncThunk('employees/delete', async (id, { 
   }
 });
 
+export const createWarehouse = createAsyncThunk('employees/createWarehouse', async (data, { rejectWithValue }) => {
+  try {
+    const res = await API.post('/warehouses', data);
+    return res.data;
+  } catch (err) {
+    return rejectWithValue(err.response?.data?.message || 'שגיאה ביצירת מחסן');
+  }
+});
+
+export const updateWarehouse = createAsyncThunk('employees/updateWarehouse', async ({ id, data }, { rejectWithValue }) => {
+  try {
+    const res = await API.patch(`/warehouses/${id}`, data);
+    return res.data;
+  } catch (err) {
+    return rejectWithValue(err.response?.data?.message || 'שגיאה בעדכון מחסן');
+  }
+});
+
+export const deleteWarehouse = createAsyncThunk('employees/deleteWarehouse', async (id, { rejectWithValue }) => {
+  try {
+    await API.delete(`/warehouses/${id}`);
+    return id;
+  } catch (err) {
+    return rejectWithValue(err.response?.data?.message || 'שגיאה במחיקת מחסן');
+  }
+});
+
 // ─── Slice ───────────────────────────────────────────────────
 
 const employeesSlice = createSlice({
@@ -111,6 +138,16 @@ const employeesSlice = createSlice({
       // fetchWarehouses
       .addCase(fetchWarehouses.fulfilled, (state, action) => {
         state.warehouses = action.payload;
+      })
+      .addCase(createWarehouse.fulfilled, (state, action) => {
+        state.warehouses.push(action.payload);
+      })
+      .addCase(updateWarehouse.fulfilled, (state, action) => {
+        const idx = state.warehouses.findIndex((w) => w._id === action.payload._id);
+        if (idx !== -1) state.warehouses[idx] = action.payload;
+      })
+      .addCase(deleteWarehouse.fulfilled, (state, action) => {
+        state.warehouses = state.warehouses.filter((w) => w._id !== action.payload);
       })
       .addCase(fetchEmployeeActiveOrders.pending, (state, action) => {
         const employeeId = action.meta.arg;

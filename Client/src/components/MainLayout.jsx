@@ -25,6 +25,7 @@ import HardwareIcon from '@mui/icons-material/Hardware';
 import CalendarMonthIcon from '@mui/icons-material/CalendarMonth';
 import RouteIcon from '@mui/icons-material/Route';
 import PostAddIcon from '@mui/icons-material/PostAdd';
+import PersonIcon from '@mui/icons-material/Person';
 
 import { logoutAction } from '../store/slices/authSlice';
 import { resetChatState } from '../store/slices/chatSlice';
@@ -111,6 +112,7 @@ const MainLayout = () => {
     { text: 'סטטוס מחסן', icon: <InventoryIcon />, path: '/warehouses', roles: ['MANAGER'] },
     { text: 'מלאי ומחסן', icon: <InventoryIcon />, path: '/warehouses', roles: ['WAREHOUSE'] },
     { text: 'ניהול עובדים', icon: <PeopleIcon />, path: '/employees', roles: ['MANAGER'] },
+    { text: 'פרטים אישיים', icon: <PersonIcon />, path: '/manager/profile', roles: ['MANAGER'] },
     { text: "צ'אט", icon: <ChatIcon />, path: '/chat', roles: ['MANAGER', 'WAREHOUSE', 'CARPENTER', 'SALES', 'DRIVER'], isChatLink: true },
   ];
 

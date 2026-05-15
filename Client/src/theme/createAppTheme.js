@@ -70,11 +70,28 @@ export function createAppTheme() {
             boxShadow: 'none',
             '&:hover': { boxShadow: '0 2px 8px rgba(62, 39, 35, 0.12)' },
           },
+          contained: {
+            color: '#FFFFFF !important',
+            '&:hover': { color: '#FFFFFF !important' },
+            '&.Mui-disabled': { color: 'rgba(255, 255, 255, 0.72) !important' },
+            '& .MuiCircularProgress-root': { color: '#FFFFFF !important' },
+            '& .MuiSvgIcon-root': { color: 'currentColor' },
+          },
           containedPrimary: {
             background: 'linear-gradient(180deg, #7E574C 0%, #5D4037 100%)',
+            color: '#FFFFFF',
+            '&:hover': {
+              background: 'linear-gradient(180deg, #6D4C41 0%, #4E342E 100%)',
+              color: '#FFFFFF',
+            },
           },
           containedSecondary: {
             background: 'linear-gradient(180deg, #E0803A 0%, #D2691E 100%)',
+            color: '#FFFFFF',
+            '&:hover': {
+              background: 'linear-gradient(180deg, #D2691E 0%, #A0522D 100%)',
+              color: '#FFFFFF',
+            },
           },
         },
       },
@@ -121,14 +138,25 @@ export function createAppTheme() {
           paper: { backgroundImage: 'none' },
         },
       },
+      MuiTableContainer: {
+        styleOverrides: {
+          root: {
+            direction: 'rtl',
+          },
+        },
+      },
       MuiTableCell: {
         styleOverrides: {
+          root: {
+            textAlign: 'right',
+          },
           head: {
             fontWeight: 700,
             fontSize: '0.8125rem',
             color: '#4E342E',
             backgroundColor: 'rgba(109, 76, 65, 0.06)',
             borderBottom: '1px solid rgba(62, 39, 35, 0.12)',
+            textAlign: 'right',
           },
         },
       },

@@ -80,8 +80,7 @@ export const getEmployeeActiveOrders = async (req, res) => {
       filter = { ...filter, assignedCarpenter: employee._id };
     } else if (employee.role === "WAREHOUSE") {
       filter = {
-        ...filter,
-        $or: [{ warehouseHandledBy: employee._id }, { warehouseSeenBy: employee._id }],
+        status: { $in: ["WAITING_FOR_PICKING", "WAITING_FOR_SUPPLY"] },
       };
     } else if (employee.role === "SALES") {
       filter = {

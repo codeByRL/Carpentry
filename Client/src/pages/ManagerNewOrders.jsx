@@ -207,6 +207,7 @@ const ManagerNewOrders = () => {
                         color="primary"
                         startIcon={<PersonAddIcon />}
                         onClick={() => handleAssignOpen(order)}
+                        sx={{ color: '#fff !important', '&:hover': { color: '#fff !important' } }}
                       >
                         שייך נגר
                       </Button>
@@ -298,7 +299,8 @@ const ManagerNewOrders = () => {
           <Button onClick={() => {
             setViewOpen(false);
             handleAssignOpen(selectedOrder);
-          }} variant="contained" color="primary" startIcon={<PersonAddIcon />}>
+          }} variant="contained" color="primary" startIcon={<PersonAddIcon />}
+            sx={{ color: '#fff !important', '&:hover': { color: '#fff !important' } }}>
             שייך נגר
           </Button>
           <Button onClick={() => setViewOpen(false)}>סגור</Button>
@@ -321,7 +323,7 @@ const ManagerNewOrders = () => {
             fullWidth
             variant="contained"
             startIcon={<AutoFixHighIcon />}
-            sx={{ mb: 2, bgcolor: '#6D4C41', '&:hover': { bgcolor: '#4E342E' } }}
+            sx={{ mb: 2, bgcolor: '#6D4C41', color: '#fff', '&:hover': { bgcolor: '#4E342E', color: '#fff' } }}
             onClick={handleAutoAssign}
             disabled={assigning}
           >
@@ -377,8 +379,9 @@ const ManagerNewOrders = () => {
             variant="contained"
             color="primary"
             disabled={!carpenterId || assigning}
+            sx={{ color: '#fff !important', '&:hover': { color: '#fff !important' } }}
           >
-            {assigning ? <CircularProgress size={20} /> : 'שייך ושלח למחסן'}
+            {assigning ? <CircularProgress size={20} sx={{ color: '#fff' }} /> : 'שייך ושלח למחסן'}
           </Button>
           <Button onClick={() => setAssignOpen(false)} disabled={assigning}>ביטול</Button>
         </DialogActions>

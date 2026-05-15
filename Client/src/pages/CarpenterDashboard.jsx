@@ -1019,7 +1019,12 @@ const CarpenterDashboard = () => {
                           variant="contained"
                           disabled={submitLoading}
                           onClick={() => openCharacterizeDialog(p)}
-                          sx={{ bgcolor: "#6D4C41", alignSelf: "flex-start", "&:hover": { bgcolor: "#4E342E" } }}
+                          sx={{
+                            bgcolor: "#6D4C41",
+                            color: "#fff",
+                            alignSelf: "flex-start",
+                            "&:hover": { bgcolor: "#4E342E", color: "#fff" },
+                          }}
                         >
                           אפיין מוצר
                         </Button>

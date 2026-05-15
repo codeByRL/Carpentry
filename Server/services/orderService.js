@@ -8,6 +8,7 @@ import FormicaModel from "../models/FormicaModel.js";
 import User from "../models/User.js";
 import { HOURS_PER_WORK_DAY } from "../config/workCalendar.js";
 import { checkMaterialsAvailability } from "./warehouseService.js";
+import { materialDeltaForProductUnit } from "../utils/materialPricing.js";
 
 /**
  * בדיקת תקפות של רשומת בד עבור הזמנה.
@@ -213,11 +214,17 @@ export const createOrder = async (orderData) => {
         requiredMaterialsMap.set(keyH, (requiredMaterialsMap.get(keyH) || 0) + neededHandleQty);
       }
 
-      // חישוב מחיר פריט (יחידה)
+      // חישוב מחיר פריט (יחידה) — תוספת חומר × כמות חומר ליחידת מוצר
       const unitPrice = Number(product.price || 0)
-        + (chosenFabricSnapshot?.priceDelta || 0)
-        + (chosenFormicaSnapshot?.priceDelta || 0)
-        + (chosenHandleSnapshot?.priceDelta || 0);
+        + (chosenFabricSnapshot
+          ? materialDeltaForProductUnit(chosenFabricSnapshot.priceDelta, product, "fabric")
+          : 0)
+        + (chosenFormicaSnapshot
+          ? materialDeltaForProductUnit(chosenFormicaSnapshot.priceDelta, product, "formica")
+          : 0)
+        + (chosenHandleSnapshot
+          ? materialDeltaForProductUnit(chosenHandleSnapshot.priceDelta, product, "handle")
+          : 0);
       totalBasePrice += unitPrice * quantity;
 
       // הוספת baseProducts הקבועים שמופיעים במוצר

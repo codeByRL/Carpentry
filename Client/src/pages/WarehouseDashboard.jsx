@@ -342,10 +342,10 @@ const SupplierPurchaseCard = ({ supplierName, items, onMarkSent, onMarkArrived, 
           <TableHead>
             <TableRow sx={{ bgcolor: '#FBF8F5' }}>
               <TableCell sx={{ fontWeight: 600, fontSize: 12, color: '#5D4037' }}>מוצר</TableCell>
-              <TableCell align="center" sx={{ fontWeight: 600, fontSize: 12, color: '#5D4037' }}>יחידה</TableCell>
-              <TableCell align="center" sx={{ fontWeight: 600, fontSize: 12, color: '#A0522D' }}>להזמנות</TableCell>
-              <TableCell align="center" sx={{ fontWeight: 600, fontSize: 12, color: '#6D4C41' }}>למלאי</TableCell>
-              <TableCell align="center" sx={{ fontWeight: 600, fontSize: 12, color: '#3E2723' }}>סה"כ</TableCell>
+              <TableCell align="right" sx={{ fontWeight: 600, fontSize: 12, color: '#5D4037' }}>יחידה</TableCell>
+              <TableCell align="right" sx={{ fontWeight: 600, fontSize: 12, color: '#A0522D' }}>להזמנות</TableCell>
+              <TableCell align="right" sx={{ fontWeight: 600, fontSize: 12, color: '#6D4C41' }}>למלאי</TableCell>
+              <TableCell align="right" sx={{ fontWeight: 600, fontSize: 12, color: '#3E2723' }}>סה"כ</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
@@ -354,18 +354,18 @@ const SupplierPurchaseCard = ({ supplierName, items, onMarkSent, onMarkArrived, 
                 <TableCell sx={{ fontSize: 13, fontWeight: 500 }}>
                   {item.product?.name || item.name || '—'}
                 </TableCell>
-                <TableCell align="center" sx={{ fontSize: 12, color: '#A1887F' }}>
+                <TableCell align="right" sx={{ fontSize: 12, color: '#A1887F' }}>
                   {item.product?.unit || '—'}
                 </TableCell>
-                <TableCell align="center">
+                <TableCell align="right">
                   <Chip label={item.forOrders} size="small"
                     sx={{ bgcolor: '#FFF8F0', color: '#A0522D', fontWeight: 700, fontSize: 11, minWidth: 36, border: '1px solid #E8C9B0' }} />
                 </TableCell>
-                <TableCell align="center">
+                <TableCell align="right">
                   <Chip label={item.forStock} size="small"
                     sx={{ bgcolor: '#EFEBE9', color: '#5D4037', fontWeight: 700, fontSize: 11, minWidth: 36, border: '1px solid #D7CCC8' }} />
                 </TableCell>
-                <TableCell align="center">
+                <TableCell align="right">
                   <Chip label={item.totalQuantityNeeded} size="small"
                     sx={{ bgcolor: C.primary, color: 'white', fontWeight: 700, fontSize: 12, minWidth: 40 }} />
                 </TableCell>
@@ -1076,13 +1076,13 @@ const WarehouseDashboard = () => {
                   <TableHead sx={{ bgcolor: '#EEEEEE' }}>
                     <TableRow>
                       <TableCell><b>מוצר בסיס</b></TableCell>
-                      <TableCell align="center"><b>ספק</b></TableCell>
-                      <TableCell align="center"><b>מיקום מדף</b></TableCell>
-                      <TableCell align="center"><b>במלאי</b></TableCell>
-                      <TableCell align="center"><b>משוריין</b></TableCell>
-                      <TableCell align="center"><b>זמין</b></TableCell>
-                      <TableCell align="center"><b>סטטוס</b></TableCell>
-                      <TableCell align="center"><b>פעולה</b></TableCell>
+                      <TableCell align="right"><b>ספק</b></TableCell>
+                      <TableCell align="right"><b>מיקום מדף</b></TableCell>
+                      <TableCell align="right"><b>במלאי</b></TableCell>
+                      <TableCell align="right"><b>משוריין</b></TableCell>
+                      <TableCell align="right"><b>זמין</b></TableCell>
+                      <TableCell align="right"><b>סטטוס</b></TableCell>
+                      <TableCell align="right"><b>פעולה</b></TableCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
@@ -1111,23 +1111,23 @@ const WarehouseDashboard = () => {
                               )}
                             </Box>
                           </TableCell>
-                          <TableCell align="center">
+                          <TableCell align="right">
                             <Typography sx={{ fontSize: 12, color: '#5D4037' }}>{product.supplier || '—'}</Typography>
                           </TableCell>
-                          <TableCell align="center">
-                            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5 }}>
+                          <TableCell align="right">
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                               <LocationOnIcon fontSize="small" sx={{ color: C.primary }} />
                               <Typography sx={{ fontWeight: 700, fontSize: 13 }}>{product.shelfLocation || '—'}</Typography>
                             </Box>
                           </TableCell>
-                          <TableCell align="center">{product.quantity} {product.unit}</TableCell>
-                          <TableCell align="center" sx={{ color: '#A1887F' }}>{product.reservedQuantity || 0}</TableCell>
-                          <TableCell align="center">
+                          <TableCell align="right">{product.quantity} {product.unit}</TableCell>
+                          <TableCell align="right" sx={{ color: '#A1887F' }}>{product.reservedQuantity || 0}</TableCell>
+                          <TableCell align="right">
                             <Typography sx={{ fontWeight: 700, color: isLow ? '#D32F2F' : '#2E7D32' }}>
                               {available} {product.unit}
                             </Typography>
                           </TableCell>
-                          <TableCell align="center">
+                          <TableCell align="right">
                             <Chip
                               label={isNew ? 'אספקה ראשונית' : isLow ? 'מלאי נמוך' : 'תקין'}
                               size="small"
@@ -1135,8 +1135,8 @@ const WarehouseDashboard = () => {
                               variant="outlined"
                             />
                           </TableCell>
-                          <TableCell align="center" onClick={e => e.stopPropagation()}>
-                            <Box sx={{ display: 'flex', gap: 1, justifyContent: 'center' }}>
+                          <TableCell align="right" onClick={e => e.stopPropagation()}>
+                            <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
                               <Button
                                 size="small" variant="outlined"
                                 startIcon={<EditIcon sx={{ fontSize: 13 }} />}

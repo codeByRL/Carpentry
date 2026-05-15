@@ -7,6 +7,7 @@ import LoginForm from './components/LoginForm';
 import MainLayout from './components/MainLayout';
 import Dashboard from './pages/Dashboard';
 import Employees from './pages/Employees';
+import ManagerProfile from './pages/ManagerProfile';
 import CatalogPage from './pages/CatalogPage';
 import ChatPage from './pages/chatPage'; // ⬅️ תוקן: ייבוא באות קטנה
 import SalesDashboard from './pages/SalesDashboard';
@@ -108,6 +109,7 @@ function App() {
             {/* === ראוטים למנהל === */}
             {user.role === 'MANAGER' && <Route path="/dashboard" element={<Dashboard />} />}
             {user.role === 'MANAGER' && <Route path="/employees" element={<Employees />} />}
+            {user.role === 'MANAGER' && <Route path="/manager/profile" element={<ManagerProfile />} />}
             {user.role === 'MANAGER' && <Route path="/catalog" element={<CatalogPage />} />}
             {user.role === 'MANAGER' && <Route path="/manager/new-orders" element={<ManagerNewOrders />} />}
             {(user.role === 'MANAGER' || user.role === 'CARPENTER') && (

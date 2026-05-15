@@ -206,7 +206,7 @@ export const createBaseProduct = async (req, res) => {
       shelfLocation, supplier,
       isMaterial: isMaterial || false,
       materialType: materialType || null,
-      priceDelta: priceDelta || 0,
+      priceDelta: Number(priceDelta) || 0,
       image: imagePath || null, description,
       isNew: true,
     });
