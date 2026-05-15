@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useCallback } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { useNavigate } from "react-router-dom";
 import {
@@ -6,6 +6,7 @@ import {
   Autocomplete,
   Box,
   Button,
+  Chip,
   CircularProgress,
   Dialog,
   DialogActions,
@@ -31,8 +32,12 @@ import AddIcon from "@mui/icons-material/Add";
 import DeleteIcon from "@mui/icons-material/Delete";
 import ChatIcon from "@mui/icons-material/Chat";
 import API from "../services/api";
+import { useFeedbackSnackbar } from "../hooks/useFeedbackSnackbar";
 import { fetchNotifications, markNotificationRead } from "../store/slices/notificationsSlice";
 import { fetchActiveChatPartners } from "../store/slices/chatSlice";
+import { useOrderLiveRefresh } from "../hooks/useOrderLiveRefresh";
+import PageHeader from "../components/PageHeader.jsx";
+import { dashboardStatColor } from "../utils/dashboardStatPalette.js";
 
 const C = {
   primary: "#D2691E",
@@ -42,7 +47,6 @@ const C = {
   border: "#E5D5C8",
 };
 
-const STAT_COLORS = ["#D2691E", "#795548", "#6B3520", "#A0522D", "#2E7D32"];
 const STAT_ICONS = [
   <HourglassEmptyIcon sx={{ fontSize: 26 }} />,
   <Inventory2Icon sx={{ fontSize: 26 }} />,
@@ -53,7 +57,7 @@ const STAT_ICONS = [
 
 const sectionTitleSx = { fontWeight: 700, fontSize: 16, color: "#4E342E", mb: 1.5 };
 const BASE_URL = import.meta.env.VITE_REACT_APP_API_URL || "http://localhost:5001";
-const HOURS_PER_WORK_WEEK = 40;
+import { hoursToWeeks, weeksToHours, HOURS_PER_WORK_DAY, WORK_DAYS_PER_WEEK } from "../utils/workCalendar";
 
 /** כתובת מלאה לתמונת קטלוג (יחסית או מלאה) */
 const catalogProductImageSrc = (path) => {
@@ -62,6 +66,14 @@ const catalogProductImageSrc = (path) => {
   const base = BASE_URL.replace(/\/$/, "");
   const p = path.startsWith("/") ? path : `/${path}`;
   return `${base}${p}`;
+};
+
+/** המרה בטוחה של כמות מטקסט למספר (כולל תמיכה בפסיק עשרוני) */
+const parseQuantity = (value) => {
+  if (value === null || value === undefined) return NaN;
+  if (typeof value === "number") return value;
+  const normalized = String(value).trim().replace(",", ".");
+  return Number(normalized);
 };
 
 /** תצוגת פריטי הזמנה + איך המוצר אמור להיראות (תמונה מהקטלוג) */
@@ -142,6 +154,20 @@ const CarpenterOrderItemsPreview = ({ order }) => {
 
 /** לשוניות תוכן תחת הכרטיס הגדול (כמו דשבורד מחסן) */
 const DASHBOARD_TAB_KEYS = ["WAITING", "ON_THE_WAY", "ACTIVE", "PAUSED", "DONE", "CATALOG", "ALERTS"];
+/** סטטוסים שמופיעים תחת «הזמנות משויכות» — לפני שההזמנה יוצאת לדרך אליך. */
+const PRE_WORK_STATUSES = [
+  "ORDERED",
+  "WAITING_FOR_WAREHOUSE",
+  "WAITING_FOR_PICKING",
+  "WAITING_FOR_SUPPLY",
+];
+const PRE_WORK_STATUS_LABELS = {
+  ORDERED: "הוזמן — לפני טיפול מחסן",
+  WAITING_FOR_WAREHOUSE: "ממתין למחסנאי",
+  WAITING_FOR_PICKING: "ממתין לליקוט",
+  WAITING_FOR_SUPPLY: "ממתין להשלמת מלאי",
+  READY_FOR_SHIPPING: "מוכן לאיסוף ע״י מוביל",
+};
 
 const StatCard = ({ title, value, sub, color, icon, onClick, active }) => (
   <Box
@@ -180,6 +206,7 @@ const StatCard = ({ title, value, sub, color, icon, onClick, active }) => (
 const CarpenterDashboard = () => {
   const dispatch = useDispatch();
   const navigate = useNavigate();
+  const { showSuccess, showError, FeedbackSnackbar } = useFeedbackSnackbar();
   const [orders, setOrders] = useState([]);
   const [catalogProducts, setCatalogProducts] = useState([]);
   const [materials, setMaterials] = useState([]);
@@ -194,37 +221,51 @@ const CarpenterDashboard = () => {
   const [newMaterialUnit, setNewMaterialUnit] = useState("יח׳");
   const [newMaterialSupplier, setNewMaterialSupplier] = useState("");
   const [newMaterialDescription, setNewMaterialDescription] = useState("");
+  /** כתובת/טלפון מהמסד (לא תמיד ב־localStorage אחרי login ישן) */
+  const [carpenterProfile, setCarpenterProfile] = useState(null);
   const { notifications } = useSelector((s) => s.notifications);
   const chatState = useSelector((s) => s.chat);
+  // המשתמש המחובר (הנגר) — נחוץ להדפסת תווית ההובלה ללקוח בסיום העבודה.
+  const user = useSelector((s) => s.auth?.user);
   /** ברירת מחדל: בעבודה — הזמנות פעילות אצל הנגר */
   const [ordersTab, setOrdersTab] = useState("ACTIVE"); // WAITING | ON_THE_WAY | ACTIVE | PAUSED | DONE | CATALOG | ALERTS
   const [characterizeForm, setCharacterizeForm] = useState({
     estimatedWorkWeeks: "",
     baseProducts: [{ product: "", quantity: 1 }],
+    needsFabricSelection: false,
+    fabricQuantityPerUnit: "",
+    needsFormicaSelection: false,
+    formicaQuantityPerUnit: "",
+    needsHandleSelection: false,
+    handleQuantityPerUnit: "",
   });
 
-  const loadData = async () => {
+  const loadData = useCallback(async (silent = false) => {
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       setError(null);
-      const [ordersRes, catalogRes, materialsRes] = await Promise.all([
+      const [ordersRes, profileRes, catalogRes, materialsRes] = await Promise.all([
         API.get("/carpenter/my-orders"),
+        API.get("/carpenter/profile"),
         API.get("/carpenter/products-for-characterization"),
         API.get("/base-products?limit=5000"),
       ]);
+      setCarpenterProfile(profileRes.data || null);
       setOrders(ordersRes.data || []);
       setCatalogProducts(catalogRes.data || []);
       setMaterials(materialsRes.data || []);
     } catch (err) {
       setError(err.response?.data?.message || "שגיאה בטעינת נתוני נגר");
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     loadData();
-  }, []);
+  }, [loadData]);
+
+  useOrderLiveRefresh(() => loadData(true));
 
   useEffect(() => {
     dispatch(fetchActiveChatPartners());
@@ -242,15 +283,19 @@ const CarpenterDashboard = () => {
   /** אישור קבלה מותר רק אחרי שהמוביל סימן «הושלם» במסירה לנגר */
   const canConfirmReceiptFromDriver = (o) => !!o.driverMarkedDeliveredToCarpenterAt;
 
+  /**
+   * «הזמנות משויכות אליך» — כל ההזמנות שכבר שויכו אליך אבל עדיין לא יצאו
+   * לדרך אליך (כולל ORDERED, ממתינות מחסן/ליקוט/אספקה, וגם READY_FOR_SHIPPING
+   * שעוד לא נתפסה ע״י מוביל). תווית הסטטוס בכרטיס מציינת את השלב המדויק.
+   */
   const waitingForWork = useMemo(
     () =>
-      orders.filter(
-        (o) =>
-          o.status === "READY_FOR_SHIPPING" &&
-          !o.receivedByCarpenter &&
-          !o.carpenterCompletedAt &&
-          !enRouteToCarpenter(o)
-      ),
+      orders.filter((o) => {
+        if (o.receivedByCarpenter || o.carpenterCompletedAt) return false;
+        if (PRE_WORK_STATUSES.includes(o.status)) return true;
+        if (o.status === "READY_FOR_SHIPPING" && !enRouteToCarpenter(o)) return true;
+        return false;
+      }),
     [orders]
   );
   const onTheWay = useMemo(
@@ -282,7 +327,7 @@ const CarpenterDashboard = () => {
       key: "WAITING",
       title: "הזמנות משויכות אליך",
       value: waitingForWork.length,
-      sub: "עדיין לא יצאו לדרך אליך",
+      sub: "כל ההזמנות שלך לפני יציאת המוביל אליך",
     },
     {
       key: "ON_THE_WAY",
@@ -305,43 +350,74 @@ const CarpenterDashboard = () => {
     },
   ];
 
-  const runAction = async (requestFn) => {
+  const failValidation = (message) => {
+    setError(message);
+    showError(message);
+  };
+
+  const runAction = async (requestFn, successMessage) => {
     try {
       setSubmitLoading(true);
       await requestFn();
       await loadData();
+      if (successMessage) showSuccess(successMessage);
     } catch (err) {
-      setError(err.response?.data?.message || "שגיאה בביצוע הפעולה");
+      const msg = err.response?.data?.message || "שגיאה בביצוע הפעולה";
+      setError(msg);
+      showError(msg);
     } finally {
       setSubmitLoading(false);
     }
   };
 
   const handleMarkReceived = (orderId) =>
-    runAction(() => API.patch(`/carpenter/orders/${orderId}/received`));
+    runAction(() => API.patch(`/carpenter/orders/${orderId}/received`), "החומרים התקבלו — העבודה החלה");
 
   const handleMarkDone = async (order) => {
-    printCustomerDeliveryLabel(order);
-    await runAction(() => API.patch(`/carpenter/orders/${order.orderId}/done`));
+    await runAction(async () => {
+      await API.patch(`/carpenter/orders/${order.orderId}/done`);
+      try {
+        printCustomerDeliveryLabel(order);
+      } catch (printErr) {
+        console.error("Failed to print customer delivery label:", printErr);
+      }
+    }, "העבודה הושלמה — ההזמנה הועברה לממתינות למוביל");
   };
 
   const handlePauseOrder = async () => {
-    if (!pauseDialogOrder || !pauseReason.trim()) return;
-    await runAction(() =>
-      API.patch(`/carpenter/orders/${pauseDialogOrder.orderId}/pause`, { reason: pauseReason.trim() })
+    if (!pauseDialogOrder || !pauseReason.trim()) {
+      showError('יש להזין סיבת השהיה לפני שמירה');
+      return;
+    }
+    await runAction(
+      () =>
+        API.patch(`/carpenter/orders/${pauseDialogOrder.orderId}/pause`, {
+          reason: pauseReason.trim(),
+        }),
+      "העבודה הושהתה"
     );
     setPauseDialogOrder(null);
     setPauseReason("");
   };
 
   const handleResumeOrder = (orderId) =>
-    runAction(() => API.patch(`/carpenter/orders/${orderId}/resume`));
+    runAction(() => API.patch(`/carpenter/orders/${orderId}/resume`), "העבודה חודשה");
+
+  const resolveCarpenterAddress = (order) => {
+    const addr =
+      order?.carpenterAddress?.trim() ||
+      carpenterProfile?.address?.trim() ||
+      user?.address?.trim() ||
+      "";
+    return addr || "לא הוגדרה כתובת לנגר — עדכני בניהול עובדים";
+  };
 
   const printCustomerDeliveryLabel = (order) => {
     const customerName = order?.customerName || "—";
     const customerAddress = order?.deliveryAddress || "—";
-    const carpenterName = user?.fullName || "נגר";
-    const carpenterAddress = user?.address || "לא הוגדרה כתובת לנגר";
+    const carpenterName =
+      carpenterProfile?.fullName || user?.fullName || "נגר";
+    const carpenterAddress = resolveCarpenterAddress(order);
     const orderCode = order?.orderId ? `#${String(order.orderId).slice(-6)}` : "—";
     const printDate = new Date().toLocaleString("he-IL");
     const html = `
@@ -385,7 +461,7 @@ const CarpenterDashboard = () => {
     setCharacterizeProduct(product);
     setCharacterizeForm({
       estimatedWorkWeeks: product.estimatedWorkTime
-        ? Number(product.estimatedWorkTime) / HOURS_PER_WORK_WEEK
+        ? hoursToWeeks(product.estimatedWorkTime)
         : "",
       baseProducts: product.baseProducts?.length
         ? product.baseProducts.map((b) => ({
@@ -393,6 +469,21 @@ const CarpenterDashboard = () => {
             quantity: b.quantity || 1,
           }))
         : [{ product: "", quantity: 1 }],
+      needsFabricSelection: product.needsFabricSelection === true,
+      fabricQuantityPerUnit:
+        product.needsFabricSelection && Number(product.fabricQuantityPerUnit) > 0
+          ? String(product.fabricQuantityPerUnit)
+          : "",
+      needsFormicaSelection: product.needsFormicaSelection === true,
+      formicaQuantityPerUnit:
+        product.needsFormicaSelection && Number(product.formicaQuantityPerUnit) > 0
+          ? String(product.formicaQuantityPerUnit)
+          : "",
+      needsHandleSelection: product.needsHandleSelection === true,
+      handleQuantityPerUnit:
+        product.needsHandleSelection && Number(product.handleQuantityPerUnit) > 0
+          ? String(product.handleQuantityPerUnit)
+          : "",
     });
   };
 
@@ -420,20 +511,79 @@ const CarpenterDashboard = () => {
 
   const handleSubmitCharacterization = async () => {
     if (!characterizeProduct) return;
-    const cleanedBaseProducts = characterizeForm.baseProducts
-      .filter((b) => b.product && Number(b.quantity) > 0)
-      .map((b) => ({ product: b.product, quantity: Number(b.quantity) }));
+
+    const cleanedBaseProducts = [];
+    for (let i = 0; i < characterizeForm.baseProducts.length; i += 1) {
+      const row = characterizeForm.baseProducts[i];
+      const rowNumber = i + 1;
+
+      if (!row?.product) {
+        failValidation(`בשורת חומר גלם ${rowNumber} לא נבחר מוצר מהרשימה`);
+        return;
+      }
+
+      const qty = parseQuantity(row.quantity);
+      if (!Number.isFinite(qty) || qty <= 0) {
+        failValidation(`בשורת חומר גלם ${rowNumber} הכמות חייבת להיות מספר גדול מ-0`);
+        return;
+      }
+
+      cleanedBaseProducts.push({ product: row.product, quantity: qty });
+    }
 
     if (!cleanedBaseProducts.length || !Number(characterizeForm.estimatedWorkWeeks)) {
-      setError("יש למלא זמן עבודה בשבועות ולהוסיף לפחות חומר גלם אחד");
+      failValidation("יש למלא זמן עבודה בשבועות ולהוסיף לפחות חומר גלם אחד");
+      return;
+    }
+    const workWeeks = Number(characterizeForm.estimatedWorkWeeks);
+    if (!Number.isFinite(workWeeks) || workWeeks <= 0) {
+      failValidation("זמן עבודה בשבועות חייב להיות מספר גדול מ־0");
       return;
     }
 
-    await runAction(() =>
-      API.post(`/carpenter/characterize/${characterizeProduct._id}`, {
-        baseProducts: cleanedBaseProducts,
-        estimatedWorkTime: Number(characterizeForm.estimatedWorkWeeks) * HOURS_PER_WORK_WEEK,
-      })
+    const needsFabric = characterizeForm.needsFabricSelection === true;
+    let fabricQty = 0;
+    if (needsFabric) {
+      fabricQty = Number(characterizeForm.fabricQuantityPerUnit);
+      if (!Number.isFinite(fabricQty) || fabricQty <= 0) {
+        failValidation("כשהמוצר דורש בחירת בד יש להזין כמות בד נדרשת ליחידה (במטרים, גדולה מ־0)");
+        return;
+      }
+    }
+
+    const needsFormica = characterizeForm.needsFormicaSelection === true;
+    let formicaQty = 0;
+    if (needsFormica) {
+      formicaQty = Number(characterizeForm.formicaQuantityPerUnit);
+      if (!Number.isFinite(formicaQty) || formicaQty <= 0) {
+        failValidation("כשהמוצר דורש בחירת פורמייקה יש להזין כמות פורמייקה נדרשת ליחידה (גדולה מ־0)");
+        return;
+      }
+    }
+
+    const needsHandle = characterizeForm.needsHandleSelection === true;
+    let handleQty = 0;
+    if (needsHandle) {
+      handleQty = Number(characterizeForm.handleQuantityPerUnit);
+      if (!Number.isFinite(handleQty) || handleQty <= 0) {
+        failValidation("כשהמוצר דורש בחירת ידית יש להזין כמות ידיות נדרשת ליחידה (גדולה מ־0)");
+        return;
+      }
+    }
+
+    await runAction(
+      () =>
+        API.post(`/carpenter/characterize/${characterizeProduct._id}`, {
+          baseProducts: cleanedBaseProducts,
+          estimatedWorkTime: weeksToHours(characterizeForm.estimatedWorkWeeks),
+          needsFabricSelection: needsFabric,
+          fabricQuantityPerUnit: needsFabric ? fabricQty : 0,
+          needsFormicaSelection: needsFormica,
+          formicaQuantityPerUnit: needsFormica ? formicaQty : 0,
+          needsHandleSelection: needsHandle,
+          handleQuantityPerUnit: needsHandle ? handleQty : 0,
+        }),
+      "אפיונך נשלח למנהל לאישור סופי"
     );
 
     setCharacterizeProduct(null);
@@ -441,7 +591,7 @@ const CarpenterDashboard = () => {
 
   const handleCreateNewMaterial = async () => {
     if (!newMaterialName.trim() || !newMaterialUnit.trim()) {
-      setError("יש למלא שם חומר ויחידת מידה");
+      failValidation("יש למלא שם חומר ויחידת מידה");
       return;
     }
     try {
@@ -473,8 +623,11 @@ const CarpenterDashboard = () => {
       setNewMaterialSupplier("");
       setNewMaterialDescription("");
       setError(null);
+      showSuccess("חומר גלם חדש נוסף בהצלחה");
     } catch (err) {
-      setError(err.response?.data?.message || "שגיאה ביצירת חומר גלם חדש");
+      const msg = err.response?.data?.message || "שגיאה ביצירת חומר גלם חדש";
+      setError(msg);
+      showError(msg);
     } finally {
       setSubmitLoading(false);
     }
@@ -483,16 +636,17 @@ const CarpenterDashboard = () => {
   if (loading) {
     return (
       <Box sx={{ display: "flex", justifyContent: "center", mt: 8 }}>
-        <CircularProgress sx={{ color: "#D2691E" }} />
+        <CircularProgress color="secondary" />
       </Box>
     );
   }
 
   return (
-    <Box sx={{ width: "100%", maxWidth: "100%", mx: "auto", boxSizing: "border-box" }}>
-      <Typography sx={{ fontSize: 22, fontWeight: 700, color: "#3E2723", mb: 3 }}>
-        דשבורד נגר
-      </Typography>
+    <Box sx={{ width: "100%", maxWidth: "100%", mx: "auto", boxSizing: "border-box", minWidth: 0 }}>
+      <PageHeader
+        title="לוח מחוונים"
+        description={`שלום, ${user?.fullName || user?.username || 'נגר'} — הזמנות לפי שלב, אפיון מוצרים, חומרים והובלות — כל מה שצריך ליום עבודה.\n${new Date().toLocaleDateString('he-IL', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}`}
+      />
 
       {error && (
         <Alert severity="error" sx={{ mb: 2 }}>
@@ -508,7 +662,7 @@ const CarpenterDashboard = () => {
               title={s.title}
               value={s.value}
               sub={s.sub}
-              color={STAT_COLORS[i]}
+              color={dashboardStatColor(i)}
               icon={STAT_ICONS[i]}
               active={ordersTab === s.key}
               onClick={() => setOrdersTab(s.key)}
@@ -563,35 +717,89 @@ const CarpenterDashboard = () => {
             <Box>
               <Typography sx={sectionTitleSx}>הזמנות משויכות אליך</Typography>
               <Typography sx={{ fontSize: 12, color: "#7B6A5F", mb: 1.5, lineHeight: 1.45 }}>
-                עדיין לא יצאו לדרך אליך
+                כל ההזמנות ששויכו אליך לפני יציאת המוביל — כולל הזמנות שעדיין במחסן.
+                תווית הסטטוס בכל כרטיס מציינת את השלב המדויק.
               </Typography>
               {waitingForWork.length === 0 ? (
                 <Alert severity="info">אין כרגע הזמנות בקטגוריה זו.</Alert>
               ) : (
-                waitingForWork.map((o) => (
-                  <Box key={o.orderId} sx={{ p: 1.2, mb: 1.2, border: "1px solid #EFE0D4", borderRadius: 2 }}>
-                    <Typography sx={{ fontWeight: 600, fontSize: 14 }}>{o.customerName}</Typography>
-                    <Typography sx={{ fontSize: 12, color: "#7B6A5F", mb: 1 }}>
-                      הזמנה #{o.orderId}
-                    </Typography>
-                    <CarpenterOrderItemsPreview order={o} />
-                    {!canConfirmReceiptFromDriver(o) && (
-                      <Typography sx={{ fontSize: 12, color: "#B45309", mt: 1, lineHeight: 1.45 }}>
-                        עוד לא הגיע אליך בפועל — לא ניתן לאשר קבלה לפני שהמוביל מסמן במערכת שהמסירה הושלמה (ההזמנה
-                        תופיע בלשונית «בדרך» עם סימון המוביל).
-                      </Typography>
-                    )}
-                    <Button
-                      size="small"
-                      variant="contained"
-                      disabled={submitLoading || !canConfirmReceiptFromDriver(o)}
-                      sx={{ mt: 1.5, bgcolor: "#A0522D", "&:hover": { bgcolor: "#7B3F1A" } }}
-                      onClick={() => handleMarkReceived(o.orderId)}
+                waitingForWork.map((o) => {
+                  const statusLabel = PRE_WORK_STATUS_LABELS[o.status] || o.status;
+                  const isReadyForShipping = o.status === "READY_FOR_SHIPPING";
+                  const isMissingStock = o.status === "WAITING_FOR_SUPPLY";
+                  return (
+                    <Box
+                      key={o.orderId}
+                      sx={{
+                        p: 1.2,
+                        mb: 1.2,
+                        border: "1px solid #EFE0D4",
+                        borderRadius: 2,
+                        bgcolor: isReadyForShipping ? "#FFFFFF" : "#FFFBF8",
+                      }}
                     >
-                      סמן כהגיע והתחל עבודה
-                    </Button>
-                  </Box>
-                ))
+                      <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 1, mb: 0.6 }}>
+                        <Typography sx={{ fontWeight: 600, fontSize: 14 }}>{o.customerName}</Typography>
+                        <Chip
+                          size="small"
+                          label={statusLabel}
+                          sx={{
+                            bgcolor: isMissingStock
+                              ? "#FDE8E8"
+                              : isReadyForShipping
+                              ? "#E8F5E9"
+                              : "#F5EDE8",
+                            color: isMissingStock
+                              ? "#8B0000"
+                              : isReadyForShipping
+                              ? "#1B5E20"
+                              : "#5D4037",
+                            fontWeight: 600,
+                            fontSize: 11,
+                          }}
+                        />
+                      </Box>
+                      <Typography sx={{ fontSize: 12, color: "#7B6A5F", mb: 1 }}>
+                        הזמנה #{o.orderId}
+                      </Typography>
+                      <CarpenterOrderItemsPreview order={o} />
+                      {o.estimatedDeliveryDate && (
+                        <Typography sx={{ fontSize: 11.5, color: "#5D4037", mt: 0.8 }}>
+                          אספקה משוערת ללקוח:{" "}
+                          {new Date(o.estimatedDeliveryDate).toLocaleDateString("he-IL")}
+                        </Typography>
+                      )}
+                      {isMissingStock && (
+                        <Typography sx={{ fontSize: 11.5, color: "#8B0000", mt: 0.4 }}>
+                          חסר חומר גלם במחסן — ההזמנה תזוז לליקוט ברגע שהמלאי יתחדש.
+                        </Typography>
+                      )}
+                      {isReadyForShipping ? (
+                        <>
+                          {!canConfirmReceiptFromDriver(o) && (
+                            <Typography sx={{ fontSize: 12, color: "#B45309", mt: 1, lineHeight: 1.45 }}>
+                              עוד לא הגיע אליך בפועל — לא ניתן לאשר קבלה לפני שהמוביל מסמן במערכת שהמסירה הושלמה (ההזמנה
+                              תופיע בלשונית «בדרך» עם סימון המוביל).
+                            </Typography>
+                          )}
+                          <Button
+                            size="small"
+                            variant="contained"
+                            disabled={submitLoading || !canConfirmReceiptFromDriver(o)}
+                            sx={{ mt: 1.5, bgcolor: "#A0522D", "&:hover": { bgcolor: "#7B3F1A" } }}
+                            onClick={() => handleMarkReceived(o.orderId)}
+                          >
+                            סמן כהגיע והתחל עבודה
+                          </Button>
+                        </>
+                      ) : (
+                        <Typography sx={{ fontSize: 11.5, color: "#7B6A5F", mt: 0.8, fontStyle: "italic" }}>
+                          המידע כאן לתכנון מראש — אין פעולה לבצע עד שהמחסן והמוביל יסיימו את שלהם.
+                        </Typography>
+                      )}
+                    </Box>
+                  );
+                })
               )}
             </Box>
           )}
@@ -603,7 +811,7 @@ const CarpenterDashboard = () => {
                 עדיין לא אישרת את קבלת המשלוח
               </Typography>
               {onTheWay.length === 0 ? (
-                <Alert severity="info">אין כרגע משלוחים בדרך.</Alert>
+                <Alert severity="info">אין כרגע הובלות בדרך.</Alert>
               ) : (
                 onTheWay.map((o) => (
                   <Box key={o.orderId} sx={{ p: 1.2, mb: 1.2, border: "1px solid #EFE0D4", borderRadius: 2 }}>
@@ -667,8 +875,12 @@ const CarpenterDashboard = () => {
                         size="small"
                         variant="outlined"
                         disabled={submitLoading}
-                        color="error"
                         onClick={() => setPauseDialogOrder(o)}
+                        sx={{
+                          borderColor: "#D2691E",
+                          color: "#D2691E",
+                          "&:hover": { borderColor: "#A0522D", bgcolor: "rgba(210, 105, 30, 0.06)" },
+                        }}
                       >
                         השהיה בשל תקלה
                       </Button>
@@ -713,11 +925,21 @@ const CarpenterDashboard = () => {
                 <Alert severity="info">אין כרגע עבודות מושהות</Alert>
               ) : (
                 pausedWork.map((o) => (
-                  <Box key={o.orderId} sx={{ p: 1.2, mb: 1.2, border: "1px solid #F5C6CB", borderRadius: 2 }}>
+                  <Box
+                    key={o.orderId}
+                    sx={{
+                      p: 1.2,
+                      mb: 1.2,
+                      border: "1px solid #E8C9B0",
+                      borderRadius: 2,
+                      bgcolor: "#FFF8F0",
+                      boxShadow: "inset 3px 0 0 #D2691E",
+                    }}
+                  >
                     <Typography sx={{ fontWeight: 600, fontSize: 14 }}>{o.customerName}</Typography>
                     <Typography sx={{ fontSize: 12, color: "#7B6A5F" }}>הזמנה #{o.orderId}</Typography>
                     <CarpenterOrderItemsPreview order={o} />
-                    <Typography sx={{ fontSize: 12, color: "#B00020", mt: 0.6 }}>
+                    <Typography sx={{ fontSize: 12.5, color: "#D2691E", fontWeight: 700, mt: 0.6 }}>
                       סיבת תקלה: {o.carpenterPauseReason || "לא צוינה"}
                     </Typography>
                     <Button
@@ -741,21 +963,70 @@ const CarpenterDashboard = () => {
               {catalogProducts.length === 0 ? (
                 <Alert severity="info">אין כרגע מוצרים לאפיון</Alert>
               ) : (
-                catalogProducts.map((p) => (
-                  <Box key={p._id} sx={{ p: 1.2, mb: 1.2, border: "1px solid #EFE0D4", borderRadius: 2 }}>
-                    <Typography sx={{ fontWeight: 600, fontSize: 14 }}>{p.name}</Typography>
-                    <Typography sx={{ fontSize: 12, color: "#7B6A5F", mb: 1 }}>{p.description || "ללא תיאור"}</Typography>
-                    <Button
-                      size="small"
-                      variant="contained"
-                      disabled={submitLoading}
-                      onClick={() => openCharacterizeDialog(p)}
-                      sx={{ bgcolor: "#6D4C41", "&:hover": { bgcolor: "#4E342E" } }}
+                catalogProducts.map((p) => {
+                  const imgSrc = catalogProductImageSrc(p.image);
+                  return (
+                    <Box
+                      key={p._id}
+                      sx={{
+                        p: 1.2,
+                        mb: 1.2,
+                        border: "1px solid #EFE0D4",
+                        borderRadius: 2,
+                        display: "flex",
+                        gap: 1.5,
+                        alignItems: "stretch",
+                      }}
                     >
-                      אפיין מוצר
-                    </Button>
-                  </Box>
-                ))
+                      <Box
+                        sx={{
+                          flex: "0 0 auto",
+                          width: { xs: 96, sm: 140 },
+                          height: { xs: 96, sm: 140 },
+                          borderRadius: 2,
+                          overflow: "hidden",
+                          border: "1px solid #E5D5C8",
+                          bgcolor: "#FFFBF8",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                        }}
+                      >
+                        {imgSrc ? (
+                          <img
+                            src={imgSrc}
+                            alt={p.name}
+                            style={{ width: "100%", height: "100%", objectFit: "contain" }}
+                          />
+                        ) : (
+                          <Typography sx={{ fontSize: 11, color: "#A1887F" }}>אין תמונה</Typography>
+                        )}
+                      </Box>
+                      <Box sx={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
+                        <Box>
+                          <Typography sx={{ fontWeight: 600, fontSize: 14 }}>{p.name}</Typography>
+                          {p.category && (
+                            <Typography sx={{ fontSize: 11, color: "#A0522D", fontWeight: 600, mb: 0.4 }}>
+                              קטגוריה: {p.category}
+                            </Typography>
+                          )}
+                          <Typography sx={{ fontSize: 12, color: "#7B6A5F", mb: 1 }}>
+                            {p.description || "ללא תיאור"}
+                          </Typography>
+                        </Box>
+                        <Button
+                          size="small"
+                          variant="contained"
+                          disabled={submitLoading}
+                          onClick={() => openCharacterizeDialog(p)}
+                          sx={{ bgcolor: "#6D4C41", alignSelf: "flex-start", "&:hover": { bgcolor: "#4E342E" } }}
+                        >
+                          אפיין מוצר
+                        </Button>
+                      </Box>
+                    </Box>
+                  );
+                })
               )}
             </Box>
           )}
@@ -827,8 +1098,21 @@ const CarpenterDashboard = () => {
         </Box>
       </Paper>
 
-      <Dialog open={!!pauseDialogOrder} onClose={() => setPauseDialogOrder(null)} maxWidth="sm" fullWidth>
-        <DialogTitle>השהיית עבודה בשל תקלה</DialogTitle>
+      <Dialog
+        open={!!pauseDialogOrder}
+        onClose={() => setPauseDialogOrder(null)}
+        maxWidth="sm"
+        fullWidth
+        PaperProps={{
+          sx: {
+            border: "1px solid #E8C9B0",
+            borderRadius: 2,
+            overflow: "hidden",
+            boxShadow: "inset 0 4px 0 #D2691E",
+          },
+        }}
+      >
+        <DialogTitle sx={{ color: "#D2691E", fontWeight: 800 }}>השהיית עבודה בשל תקלה</DialogTitle>
         <DialogContent>
           <TextField
             autoFocus
@@ -838,12 +1122,24 @@ const CarpenterDashboard = () => {
             value={pauseReason}
             onChange={(e) => setPauseReason(e.target.value)}
             label="סיבת התקלה"
-            sx={{ mt: 1 }}
+            sx={{
+              mt: 1,
+              "& .MuiOutlinedInput-notchedOutline": { borderColor: "#E8C9B0" },
+            }}
+            InputLabelProps={{ sx: { "&.Mui-focused": { color: "#D2691E" } } }}
           />
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setPauseDialogOrder(null)}>ביטול</Button>
-          <Button variant="contained" color="error" onClick={handlePauseOrder} disabled={submitLoading || !pauseReason.trim()}>
+          <Button
+            variant="contained"
+            onClick={handlePauseOrder}
+            disabled={submitLoading || !pauseReason.trim()}
+            sx={{
+              bgcolor: "#D2691E",
+              "&:hover": { bgcolor: "#A0522D" },
+            }}
+          >
             אשר השהיה
           </Button>
         </DialogActions>
@@ -855,26 +1151,40 @@ const CarpenterDashboard = () => {
         maxWidth="md"
         fullWidth
       >
-        <DialogTitle>אפיון מוצר: {characterizeProduct?.name}</DialogTitle>
+        <DialogTitle>
+          אפיון מוצר: {characterizeProduct?.name}
+          {characterizeProduct?.category && (
+            <Typography component="span" sx={{ ml: 1, fontSize: 13, color: "#A0522D" }}>
+              ({characterizeProduct.category})
+            </Typography>
+          )}
+        </DialogTitle>
         <DialogContent dividers>
           <Box sx={{ display: "flex", flexDirection: "column", gap: 2, mt: 1 }}>
-            {characterizeProduct?.image && (
-              <Box
-                sx={{
-                  borderRadius: 2,
-                  overflow: "hidden",
-                  height: { xs: 260, md: 420 },
-                  border: "1px solid #E5D5C8",
-                  bgcolor: "#fff",
-                }}
-              >
+            <Box
+              sx={{
+                borderRadius: 2,
+                overflow: "hidden",
+                height: { xs: 260, md: 420 },
+                border: "1px solid #E5D5C8",
+                bgcolor: "#fff",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              {catalogProductImageSrc(characterizeProduct?.image) ? (
                 <img
-                  src={`${BASE_URL}${characterizeProduct.image}`}
-                  alt={characterizeProduct.name}
+                  src={catalogProductImageSrc(characterizeProduct?.image)}
+                  alt={characterizeProduct?.name || "מוצר"}
                   style={{ width: "100%", height: "100%", objectFit: "contain" }}
                 />
-              </Box>
-            )}
+              ) : (
+                <Typography sx={{ fontSize: 13, color: "#A1887F" }}>
+                  אין תמונה למוצר זה — ניתן לפנות למנהל להוספה
+                </Typography>
+              )}
+            </Box>
             <TextField
               label="תיאור מוצר (מהמנהל)"
               value={characterizeProduct?.description || ""}
@@ -888,6 +1198,7 @@ const CarpenterDashboard = () => {
               inputProps={{ min: 0, step: 0.5 }}
               value={characterizeForm.estimatedWorkWeeks}
               onChange={(e) => setCharacterizeForm((prev) => ({ ...prev, estimatedWorkWeeks: e.target.value }))}
+              helperText={`שבוע = ${WORK_DAYS_PER_WEEK} ימי עבודה × ${HOURS_PER_WORK_DAY} שעות ליום`}
             />
 
             <Box>
@@ -944,7 +1255,185 @@ const CarpenterDashboard = () => {
               </Button>
             </Box>
 
+            <Box
+              sx={{
+                p: 1.5,
+                borderRadius: 2,
+                border: `1px solid ${C.border}`,
+                bgcolor: "#FFFBF8",
+                display: "flex",
+                flexDirection: "column",
+                gap: 1.2,
+              }}
+            >
+              <Typography sx={{ fontWeight: 700, color: C.dark, fontSize: 14 }}>
+                בחירת בד ע״י הלקוח
+              </Typography>
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={characterizeForm.needsFabricSelection}
+                    onChange={(e) =>
+                      setCharacterizeForm((prev) => ({
+                        ...prev,
+                        needsFabricSelection: e.target.checked,
+                        fabricQuantityPerUnit: e.target.checked ? prev.fabricQuantityPerUnit : "",
+                      }))
+                    }
+                    sx={{ "& .MuiSwitch-thumb": { bgcolor: C.primary } }}
+                  />
+                }
+                label={
+                  <Typography sx={{ fontSize: 13, color: C.dark }}>
+                    האם המוצר דורש בחירת בד?{" "}
+                    <Box
+                      component="span"
+                      sx={{
+                        fontWeight: 700,
+                        color: characterizeForm.needsFabricSelection ? "#2E7D32" : "#8B0000",
+                      }}
+                    >
+                      {characterizeForm.needsFabricSelection ? "כן — דורש בחירת בד" : "לא — לא דורש בחירת בד"}
+                    </Box>
+                  </Typography>
+                }
+              />
+              {characterizeForm.needsFabricSelection && (
+                <TextField
+                  label="כמות בד נדרשת ליחידה (במטרים)"
+                  type="number"
+                  inputProps={{ min: 0, step: 0.1 }}
+                  value={characterizeForm.fabricQuantityPerUnit}
+                  onChange={(e) =>
+                    setCharacterizeForm((prev) => ({
+                      ...prev,
+                      fabricQuantityPerUnit: e.target.value,
+                    }))
+                  }
+                  helperText="כמה מטרים של בד צורך מוצר אחד"
+                />
+              )}
+            </Box>
 
+            <Box
+              sx={{
+                p: 1.5,
+                borderRadius: 2,
+                border: `1px solid ${C.border}`,
+                bgcolor: "#FFFBF8",
+                display: "flex",
+                flexDirection: "column",
+                gap: 1.2,
+              }}
+            >
+              <Typography sx={{ fontWeight: 700, color: C.dark, fontSize: 14 }}>
+                בחירת פורמייקה ע״י הלקוח
+              </Typography>
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={characterizeForm.needsFormicaSelection}
+                    onChange={(e) =>
+                      setCharacterizeForm((prev) => ({
+                        ...prev,
+                        needsFormicaSelection: e.target.checked,
+                        formicaQuantityPerUnit: e.target.checked ? prev.formicaQuantityPerUnit : "",
+                      }))
+                    }
+                    sx={{ "& .MuiSwitch-thumb": { bgcolor: C.primary } }}
+                  />
+                }
+                label={
+                  <Typography sx={{ fontSize: 13, color: C.dark }}>
+                    האם המוצר דורש בחירת פורמייקה?{" "}
+                    <Box
+                      component="span"
+                      sx={{
+                        fontWeight: 700,
+                        color: characterizeForm.needsFormicaSelection ? "#2E7D32" : "#8B0000",
+                      }}
+                    >
+                      {characterizeForm.needsFormicaSelection ? "כן — דורש בחירת פורמייקה" : "לא — לא דורש בחירת פורמייקה"}
+                    </Box>
+                  </Typography>
+                }
+              />
+              {characterizeForm.needsFormicaSelection && (
+                <TextField
+                  label="כמות פורמייקה נדרשת ליחידה (במ״ר)"
+                  type="number"
+                  inputProps={{ min: 0, step: 0.1 }}
+                  value={characterizeForm.formicaQuantityPerUnit}
+                  onChange={(e) =>
+                    setCharacterizeForm((prev) => ({
+                      ...prev,
+                      formicaQuantityPerUnit: e.target.value,
+                    }))
+                  }
+                  helperText="כמה מ״ר פורמייקה צורך מוצר אחד"
+                />
+              )}
+            </Box>
+
+            <Box
+              sx={{
+                p: 1.5,
+                borderRadius: 2,
+                border: `1px solid ${C.border}`,
+                bgcolor: "#FFFBF8",
+                display: "flex",
+                flexDirection: "column",
+                gap: 1.2,
+              }}
+            >
+              <Typography sx={{ fontWeight: 700, color: C.dark, fontSize: 14 }}>
+                בחירת ידית ע״י הלקוח
+              </Typography>
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={characterizeForm.needsHandleSelection}
+                    onChange={(e) =>
+                      setCharacterizeForm((prev) => ({
+                        ...prev,
+                        needsHandleSelection: e.target.checked,
+                        handleQuantityPerUnit: e.target.checked ? prev.handleQuantityPerUnit : "",
+                      }))
+                    }
+                    sx={{ "& .MuiSwitch-thumb": { bgcolor: C.primary } }}
+                  />
+                }
+                label={
+                  <Typography sx={{ fontSize: 13, color: C.dark }}>
+                    האם המוצר דורש בחירת ידית?{" "}
+                    <Box
+                      component="span"
+                      sx={{
+                        fontWeight: 700,
+                        color: characterizeForm.needsHandleSelection ? "#2E7D32" : "#8B0000",
+                      }}
+                    >
+                      {characterizeForm.needsHandleSelection ? "כן — דורש בחירת ידית" : "לא — לא דורש בחירת ידית"}
+                    </Box>
+                  </Typography>
+                }
+              />
+              {characterizeForm.needsHandleSelection && (
+                <TextField
+                  label="כמות ידיות נדרשת ליחידה"
+                  type="number"
+                  inputProps={{ min: 0, step: 1 }}
+                  value={characterizeForm.handleQuantityPerUnit}
+                  onChange={(e) =>
+                    setCharacterizeForm((prev) => ({
+                      ...prev,
+                      handleQuantityPerUnit: e.target.value,
+                    }))
+                  }
+                  helperText="כמה ידיות צורך מוצר אחד"
+                />
+              )}
+            </Box>
           </Box>
         </DialogContent>
         <DialogActions>
@@ -995,6 +1484,7 @@ const CarpenterDashboard = () => {
           </Button>
         </DialogActions>
       </Dialog>
+      <FeedbackSnackbar />
     </Box>
   );
 };

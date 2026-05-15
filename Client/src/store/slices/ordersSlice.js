@@ -223,7 +223,10 @@ const ordersSlice = createSlice({
       .addCase(assignCarpenterToOrder.pending, handlePending)
       .addCase(assignCarpenterToOrder.fulfilled, (state, action) => {
         state.loading = false;
-        state.orders = state.orders.filter(o => o._id !== action.payload._id);
+        // מעדכנים את ההזמנה במקום (לא מסירים) — אחרת היא נעלמת מהדשבורד הראשי
+        // ויש חוסר התאמה בין כמות בסוגריים לכמות בפועל בליסט.
+        const idx = state.orders.findIndex(o => o._id === action.payload._id);
+        if (idx !== -1) state.orders[idx] = action.payload;
         if (state.selectedOrder?._id === action.payload._id) {
           state.selectedOrder = action.payload;
         }
@@ -233,7 +236,8 @@ const ordersSlice = createSlice({
       .addCase(assignBestCarpenterToOrder.pending, handlePending)
       .addCase(assignBestCarpenterToOrder.fulfilled, (state, action) => {
         state.loading = false;
-        state.orders = state.orders.filter(o => o._id !== action.payload._id);
+        const idx = state.orders.findIndex(o => o._id === action.payload._id);
+        if (idx !== -1) state.orders[idx] = action.payload;
         if (state.selectedOrder?._id === action.payload._id) {
           state.selectedOrder = action.payload;
         }

@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import {
   Box, Typography, Grid, Paper, Button, CircularProgress,
-  Alert, IconButton, Dialog, DialogTitle, DialogContent, DialogActions, TextField, MenuItem, Snackbar
+  Alert, IconButton, Dialog, DialogTitle, DialogContent, DialogActions, TextField, MenuItem,
+  Tabs, Tab, Autocomplete
 } from '@mui/material';
 import ShoppingCartIcon from '@mui/icons-material/ShoppingCart';
 import AssignmentIcon from '@mui/icons-material/Assignment';
@@ -13,9 +14,13 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import AddIcon from '@mui/icons-material/Add';
 
 import { fetchOrdersForSales, markOrderAsPaid, confirmQuotationOrder, createOrder, clearSubmitError } from '../store/slices/ordersSlice';
+import { useFeedbackSnackbar } from '../hooks/useFeedbackSnackbar';
+import { firstFormError } from '../utils/formFeedback';
 import { fetchNotifications, markNotificationRead } from '../store/slices/notificationsSlice';
 import { fetchActiveChatPartners } from '../store/slices/chatSlice';
 import API from '../services/api';
+import PageHeader from '../components/PageHeader.jsx';
+import { dashboardStatColor } from '../utils/dashboardStatPalette.js';
 
 // === קבועים ===
 const STATUS_LABEL = {
@@ -29,7 +34,6 @@ const STATUS_LABEL = {
   DONE:                  { label: 'הושלם',          color: '#9E9E9F' },
 };
 
-const STAT_COLORS = ['#D2691E', '#6B3520', '#A0522D', '#2E7D32'];
 const STAT_ICONS = [
   <ShoppingCartIcon sx={{ fontSize: 26 }} />,
   <AssignmentIcon   sx={{ fontSize: 26 }} />,
@@ -43,7 +47,9 @@ const CARD_COLORS = [
 ];
 const PRODUCT_TYPES = ['מיטה', 'ארון', 'שידה', 'ספה', 'שולחן', 'כסא'];
 const VAT_RATE = 0.18;
-const DEFAULT_ADDITIONAL_DELIVERY_DAYS = 14;
+// תאריך אספקה משוער = שעות העבודה שהנגר איפיין מומרות לימי הכנה (4 ש' = יום) + 7 ימי מרווח להובלה.
+const WORK_HOURS_PER_PREPARATION_DAY = 4;
+const ADDITIONAL_DELIVERY_DAYS_AFTER_PREPARATION = 7;
 const MAX_ITEM_QUANTITY = 100;
 
 const normalizePhone = (value = '') => value.replace(/[^\d]/g, '').replace(/^972/, '0');
@@ -62,6 +68,11 @@ const isValidIsraeliId = (value = '') => {
   return check % 10 === 0;
 };
 
+// בחירת בד מוצגת אך ורק אם המוצר הוגדר מפורשות כדורש בחירת בד באפיון/בעריכת המנהל.
+const productRequiresFabricSelection = (_item, product) => product?.needsFabricSelection === true;
+const productRequiresFormicaSelection = (_item, product) => product?.needsFormicaSelection === true;
+const productRequiresHandleSelection = (_item, product) => product?.needsHandleSelection === true;
+
 const SectionHeader = ({ emoji, title, btnLabel, onClick, titleColor = '#3E2723' }) => (
   <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2, flexWrap: 'wrap', gap: 1 }}>
     <Typography sx={{ fontWeight: 700, fontSize: 14, color: titleColor }}>
@@ -79,6 +90,8 @@ const SectionHeader = ({ emoji, title, btnLabel, onClick, titleColor = '#3E2723'
 const SalesDashboard = () => {
   const dispatch = useDispatch();
   const navigate = useNavigate();
+  const location = useLocation();
+  const { showSuccess, showError, FeedbackSnackbar } = useFeedbackSnackbar();
 
   const { user }                                          = useSelector(s => s.auth);
   const { orders, loading: ordersLoading, submitLoading, submitError } = useSelector(s => s.orders);
@@ -98,14 +111,15 @@ const SalesDashboard = () => {
     deliveryAddress: '', invoiceName: '',
     orderDate: new Date().toISOString().slice(0, 10),
     estimatedDeliveryDate: '',
-    items: [{ productType: '', catalogProductId: '', quantity: 1, selectedFabric: '' }]
+    items: [{ productType: '', catalogProductId: '', quantity: 1, selectedFabric: '', selectedFormica: '', selectedHandle: '' }]
   });
   const [orderFormErrors, setOrderFormErrors] = useState({});
   const [activeCatalog, setActiveCatalog] = useState([]);
   const [fabricMaterials, setFabricMaterials] = useState([]);
+  const [formicaModels, setFormicaModels] = useState([]);
+  const [handleMaterials, setHandleMaterials] = useState([]);
   const [deliveryDateManuallyEdited, setDeliveryDateManuallyEdited] = useState(false);
-  const [submitHint, setSubmitHint] = useState('');
-  const [salesView, setSalesView] = useState('COLLECTION'); // COLLECTION | QUOTATION | ACTIVE
+  const [salesView, setSalesView] = useState('COLLECTION'); // COLLECTION | QUOTATION | PAID
   const [selectedOrder, setSelectedOrder] = useState(null);
 
   useEffect(() => {
@@ -119,12 +133,39 @@ const SalesDashboard = () => {
       .then((r) => (Array.isArray(r.data) ? r.data : []))
       .then((fabrics) => setFabricMaterials(Array.isArray(fabrics) ? fabrics : []))
       .catch(() => setFabricMaterials([]));
+    API.get('/formica?limit=500')
+      .then((r) => setFormicaModels(Array.isArray(r.data) ? r.data : []))
+      .catch(() => setFormicaModels([]));
+    API.get('/base-products?isMaterial=true&type=handle&limit=500')
+      .then((r) => (Array.isArray(r.data) ? r.data : []))
+      .then((handles) => setHandleMaterials(Array.isArray(handles) ? handles : []))
+      .catch(() => setHandleMaterials([]));
   }, [dispatch]);
 
-  // === פילטור הזמנות ===
-  const quotationPendingOrders = orders.filter(o => o.status === 'QUOTATION_PENDING' && !o.isPaid);
-  const activeOrders           = orders.filter(o => o.status !== 'DONE' && o.status !== 'QUOTATION_PENDING' && !o.isPaid);
-  const collectionPendingOrders = orders.filter(o => o.status !== 'DONE' && !o.isPaid && o.status !== 'QUOTATION_PENDING');
+  useEffect(() => {
+    if (location.pathname === '/sales/new-order') {
+      dispatch(clearSubmitError());
+      setOrderFormErrors({});
+      setOpenNewOrderDialog(true);
+      navigate('/sales-dashboard', { replace: true });
+    }
+  }, [location.pathname, dispatch, navigate]);
+
+  // === פילטור הזמנות (ממוין מהחדשה לישנה כדי שהדחופות יופיעו למעלה) ===
+  const sortByDateDesc = (a, b) => new Date(b.orderDate || 0) - new Date(a.orderDate || 0);
+  const quotationPendingOrders = orders
+    .filter(o => o.status === 'QUOTATION_PENDING' && !o.isPaid)
+    .slice()
+    .sort(sortByDateDesc);
+  const unpaidOrders = orders
+    .filter(o => o.status !== 'DONE' && o.status !== 'QUOTATION_PENDING' && !o.isPaid)
+    .slice()
+    .sort(sortByDateDesc);
+  const paidOrders = orders
+    .filter(o => o.isPaid)
+    .slice()
+    .sort(sortByDateDesc);
+  const collectionPendingOrders = unpaidOrders;
 
   // === סטטיסטיקות ===
   const stats = [
@@ -136,15 +177,15 @@ const SalesDashboard = () => {
     },
     {
       title: 'הזמנות פעילות',
-      value: activeOrders.length,
-      sub: `${activeOrders.filter(o => o.status === 'ORDERED').length} במערכת`,
-      onClick: () => setSalesView('ACTIVE'),
-    },
-    {
-      title: 'בגבייה',
       value: collectionPendingOrders.length,
       sub: `${collectionPendingOrders.length} טרם שולמו`,
       onClick: () => setSalesView('COLLECTION'),
+    },
+    {
+      title: 'שולמו',
+      value: paidOrders.length,
+      sub: `${paidOrders.length} הזמנות שולמו`,
+      onClick: () => setSalesView('PAID'),
     },
     {
       title: "צ'אט והתראות",
@@ -155,27 +196,33 @@ const SalesDashboard = () => {
   ];
 
   const viewMeta = {
-    COLLECTION: { title: 'הזמנות בגבייה', emoji: '💰', empty: 'אין הזמנות בגבייה כרגע.' },
+    COLLECTION: { title: 'הזמנות', emoji: '💰', empty: 'אין הזמנות בגבייה כרגע.' },
     QUOTATION: { title: 'הצעות מחיר', emoji: '📝', empty: 'אין הזמנות בהצעת מחיר כרגע.' },
-    ACTIVE: { title: 'הזמנות פעילות', emoji: '📦', empty: 'אין הזמנות פעילות כרגע.' },
+    PAID: { title: 'הזמנות ששולמו', emoji: '✅', empty: 'אין הזמנות ששולמו כרגע.' },
   };
 
   const displayedOrders =
     salesView === 'QUOTATION' ? quotationPendingOrders
-    : salesView === 'ACTIVE' ? activeOrders
+    : salesView === 'PAID' ? paidOrders
     : collectionPendingOrders;
 
   const handleMarkAsPaid = async (orderId) => {
     if (window.confirm('האם אתה בטוח שברצונך לסמן הזמנה זו כשולמה?')) {
-      await dispatch(markOrderAsPaid(orderId));
-      dispatch(fetchOrdersForSales());
+      const result = await dispatch(markOrderAsPaid(orderId));
+      if (!result.error) {
+        showSuccess('ההזמנה סומנה כשולמה');
+        dispatch(fetchOrdersForSales());
+      }
     }
   };
 
   const handleConfirmQuotation = async (orderId) => {
     if (window.confirm('להמיר הצעת מחיר להזמנה פעילה?')) {
-      await dispatch(confirmQuotationOrder(orderId));
-      dispatch(fetchOrdersForSales());
+      const result = await dispatch(confirmQuotationOrder(orderId));
+      if (!result.error) {
+        showSuccess('הצעת המחיר הומרה להזמנה פעילה');
+        dispatch(fetchOrdersForSales());
+      }
     }
   };
 
@@ -193,9 +240,13 @@ const SalesDashboard = () => {
     if (field === 'productType') {
       nextItems[index].catalogProductId = '';
       nextItems[index].selectedFabric = '';
+      nextItems[index].selectedFormica = '';
+      nextItems[index].selectedHandle = '';
     }
     if (field === 'catalogProductId') {
       nextItems[index].selectedFabric = '';
+      nextItems[index].selectedFormica = '';
+      nextItems[index].selectedHandle = '';
     }
     setNewOrderData({ ...newOrderData, items: nextItems });
   };
@@ -203,7 +254,7 @@ const SalesDashboard = () => {
   const addOrderItemRow = () => {
     setNewOrderData((prev) => ({
       ...prev,
-      items: [...prev.items, { productType: '', catalogProductId: '', quantity: 1, selectedFabric: '' }],
+      items: [...prev.items, { productType: '', catalogProductId: '', quantity: 1, selectedFabric: '', selectedFormica: '', selectedHandle: '' }],
     }));
   };
 
@@ -219,7 +270,11 @@ const SalesDashboard = () => {
 
   const getFilteredModelsByType = (productType) => {
     if (!productType) return activeCatalog;
-    return activeCatalog.filter((p) => (p.name || '').includes(productType));
+    // נסיב על שדה category — מקור האמת. נופלים חזרה ל־includes לשם תאימות לאחור עד שכל המוצרים מוגרים.
+    return activeCatalog.filter((p) => {
+      if (p?.category) return p.category === productType;
+      return (p?.name || '').includes(productType);
+    });
   };
 
   const getFabricOptionsForItem = () => {
@@ -230,11 +285,18 @@ const SalesDashboard = () => {
   const getUnitPrice = (item) => {
     const p = getProductById(item.catalogProductId);
     if (!p) return 0;
-    const supportsUpholstery = ['מיטה', 'כסא'].includes(item.productType);
     let delta = 0;
-    if (supportsUpholstery && p.needsFabricSelection && item.selectedFabric) {
+    if (productRequiresFabricSelection(item, p) && item.selectedFabric) {
       const f = fabricMaterials.find((m) => m._id === item.selectedFabric);
       delta += Number(f?.priceDelta || 0);
+    }
+    if (productRequiresFormicaSelection(item, p) && item.selectedFormica) {
+      const fm = formicaModels.find((m) => m._id === item.selectedFormica);
+      delta += Number(fm?.priceDelta || 0);
+    }
+    if (productRequiresHandleSelection(item, p) && item.selectedHandle) {
+      const h = handleMaterials.find((m) => m._id === item.selectedHandle);
+      delta += Number(h?.priceDelta || 0);
     }
     return Number(p.price || 0) + delta;
   };
@@ -251,16 +313,24 @@ const SalesDashboard = () => {
     return `${y}-${m}-${d}`;
   };
 
-  const computeDefaultEstimatedDeliveryDate = () => {
-    const baseDate = newOrderData.orderDate ? new Date(newOrderData.orderDate) : new Date();
-    const maxCatalogHours = newOrderData.items.reduce((max, item) => {
+  // מחזיר את זמן ההכנה הארוך ביותר בקטלוג בקרב שורות ההזמנה (בשעות עבודה),
+  // לפי מה שהנגר איפיין למוצר (estimatedWorkTime * כמות בשורה).
+  const getMaxCarpenterPreparationHours = () => {
+    return newOrderData.items.reduce((max, item) => {
       const product = getProductById(item.catalogProductId);
       const estimatedWork = Number(product?.estimatedWorkTime || 0);
+      if (!estimatedWork) return max;
       const perLineHours = estimatedWork * Number(item.quantity || 1);
       return perLineHours > max ? perLineHours : max;
     }, 0);
-    const workDays = Math.ceil(maxCatalogHours / 8);
-    const totalDays = workDays + DEFAULT_ADDITIONAL_DELIVERY_DAYS;
+  };
+
+  const computeDefaultEstimatedDeliveryDate = () => {
+    const baseDate = newOrderData.orderDate ? new Date(newOrderData.orderDate) : new Date();
+    const maxHours = getMaxCarpenterPreparationHours();
+    // 4 שעות עבודה = יום הכנה אחד; אחר כך מוסיפים 7 ימים מרווח להובלה.
+    const preparationDays = Math.ceil(maxHours / WORK_HOURS_PER_PREPARATION_DAY);
+    const totalDays = preparationDays + ADDITIONAL_DELIVERY_DAYS_AFTER_PREPARATION;
     const due = new Date(baseDate);
     due.setDate(due.getDate() + totalDays);
     return toDateInput(due);
@@ -331,18 +401,44 @@ const SalesDashboard = () => {
         }
       }
       const p = getProductById(item.catalogProductId);
-      const supportsUpholstery = ['מיטה', 'כסא'].includes(item.productType);
-      if (supportsUpholstery && p?.needsFabricSelection && item.selectedFabric && !getFabricOptionsForItem().some((m) => m._id === item.selectedFabric)) {
+      if (productRequiresFabricSelection(item, p) && !item.selectedFabric) {
+        errors[`selectedFabric_${idx}`] = 'חובה לבחור בד למוצר זה';
+      } else if (
+        productRequiresFabricSelection(item, p) &&
+        item.selectedFabric &&
+        !getFabricOptionsForItem().some((m) => m._id === item.selectedFabric)
+      ) {
         errors[`selectedFabric_${idx}`] = 'בחירת הבד אינה תקפה למוצר זה';
+      }
+      if (productRequiresFormicaSelection(item, p) && !item.selectedFormica) {
+        errors[`selectedFormica_${idx}`] = 'חובה לבחור פורמייקה למוצר זה';
+      } else if (
+        productRequiresFormicaSelection(item, p) &&
+        item.selectedFormica &&
+        !formicaModels.some((m) => m._id === item.selectedFormica)
+      ) {
+        errors[`selectedFormica_${idx}`] = 'בחירת הפורמייקה אינה תקפה למוצר זה';
+      }
+      if (productRequiresHandleSelection(item, p) && !item.selectedHandle) {
+        errors[`selectedHandle_${idx}`] = 'חובה לבחור ידית למוצר זה';
+      } else if (
+        productRequiresHandleSelection(item, p) &&
+        item.selectedHandle &&
+        !handleMaterials.some((m) => m._id === item.selectedHandle)
+      ) {
+        errors[`selectedHandle_${idx}`] = 'בחירת הידית אינה תקפה למוצר זה';
       }
     });
     setOrderFormErrors(errors);
-    return Object.keys(errors).length === 0;
+    if (Object.keys(errors).length > 0) {
+      showError(firstFormError(errors));
+      return false;
+    }
+    return true;
   };
 
   const handleCreateNewOrder = async (status) => {
     if (!validateNewOrderForm()) {
-      setSubmitHint('יש שדות חובה או שגיאות בטופס. בדוק את הסימונים האדומים ונסה שוב.');
       return;
     }
     const payload = {
@@ -363,15 +459,21 @@ const SalesDashboard = () => {
           productType: item.productType,
           quantity: Number(item.quantity),
         };
-        const supportsUpholstery = ['מיטה', 'כסא'].includes(item.productType);
-        if (supportsUpholstery && p?.needsFabricSelection && item.selectedFabric) {
+        if (productRequiresFabricSelection(item, p) && item.selectedFabric) {
           row.selectedFabric = item.selectedFabric;
+        }
+        if (productRequiresFormicaSelection(item, p) && item.selectedFormica) {
+          row.selectedFormica = item.selectedFormica;
+        }
+        if (productRequiresHandleSelection(item, p) && item.selectedHandle) {
+          row.selectedHandle = item.selectedHandle;
         }
         return row;
       }),
     };
     try {
       await dispatch(createOrder(payload)).unwrap();
+      showSuccess(status === 'QUOTATION_PENDING' ? 'הצעת המחיר נשמרה בהצלחה' : 'ההזמנה נוצרה בהצלחה');
       setOpenNewOrderDialog(false);
       setNewOrderData({
         customerName: '', customerPhone1: '', customerPhone2: '',
@@ -379,53 +481,35 @@ const SalesDashboard = () => {
         deliveryAddress: '', invoiceName: '',
         orderDate: new Date().toISOString().slice(0, 10),
         estimatedDeliveryDate: '',
-        items: [{ productType: '', catalogProductId: '', quantity: 1, selectedFabric: '' }],
+        items: [{ productType: '', catalogProductId: '', quantity: 1, selectedFabric: '', selectedFormica: '', selectedHandle: '' }],
       });
       setDeliveryDateManuallyEdited(false);
       dispatch(fetchOrdersForSales());
-    } catch {
-      /* submitError מוגדר ב־slice */
+    } catch (err) {
+      showError(firstFormError(err?.message || submitError, 'שגיאה בשמירת ההזמנה'));
     }
   };
 
   if (ordersLoading) return (
     <Box sx={{ display: 'flex', justifyContent: 'center', mt: 8 }}>
-      <CircularProgress sx={{ color: '#D2691E' }} />
+      <CircularProgress color="secondary" />
     </Box>
   );
 
   return (
-    <Box sx={{ width: '100%', maxWidth: '100%', mx: 'auto', boxSizing: 'border-box' }}>
+    <Box sx={{ width: '100%', maxWidth: '100%', mx: 'auto', boxSizing: 'border-box', minWidth: 0 }}>
 
-      {/* כותרת */}
-      <Box sx={{ mb: 3, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <Box>
-          <Typography sx={{ fontSize: 21, fontWeight: 700, color: '#3E2723' }}>
-            שלום, {user?.fullName || user?.username || 'סוכן מכירות'} 👋
-          </Typography>
-          <Typography sx={{ fontSize: 12.5, color: '#A1887F', mt: 0.3 }}>
-            {new Date().toLocaleDateString('he-IL', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
-          </Typography>
-        </Box>
-        <Button
-          variant="contained"
-          sx={{ bgcolor: '#D2691E', '&:hover': { bgcolor: '#A0522D' } }}
-          onClick={() => {
-            dispatch(clearSubmitError());
-            setOrderFormErrors({});
-            setOpenNewOrderDialog(true);
-          }}
-        >
-          + הזמנה חדשה
-        </Button>
-      </Box>
+      <PageHeader
+        title="לוח מחוונים"
+        description={`שלום, ${user?.fullName || user?.username || 'סוכן מכירות'} — הצעות מחיר, הזמנות, לקוחות והתכתבות עם הצוות.\n${new Date().toLocaleDateString('he-IL', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}`}
+      />
 
       {/* כרטיסי סטטיסטיקה */}
       <Grid container spacing={2} sx={{ mb: 3 }}>
         {stats.map((stat, i) => (
           <Grid size={{ xs: 6, md: 3 }} key={i}>
             <Box onClick={stat.onClick} sx={{
-              bgcolor: STAT_COLORS[i], borderRadius: 3, p: 2.5, height: 140,
+              bgcolor: dashboardStatColor(i), borderRadius: 3, p: 2.5, height: 140,
               cursor: 'pointer', display: 'flex', flexDirection: 'column',
               justifyContent: 'space-between', transition: 'transform 0.15s ease',
               '&:hover': { transform: 'translateY(-2px)', opacity: 0.92 },
@@ -465,10 +549,29 @@ const SalesDashboard = () => {
               title={viewMeta[salesView].title}
               titleColor={CARD_COLORS[0].title}
             />
+            <Box sx={{ mb: 1.5 }}>
+              <Tabs
+                value={salesView}
+                onChange={(_, val) => setSalesView(val)}
+                variant="scrollable"
+                scrollButtons="auto"
+                allowScrollButtonsMobile
+                sx={{
+                  borderBottom: `1px solid ${CARD_COLORS[0].border}`,
+                  '& .MuiTab-root': { fontSize: 12.5, fontWeight: 600, minHeight: 42 },
+                  '& .Mui-selected': { color: '#D2691E' },
+                  '& .MuiTabs-indicator': { bgcolor: '#D2691E' },
+                }}
+              >
+                <Tab value="COLLECTION" label={`לא שולמו (${collectionPendingOrders.length})`} />
+                <Tab value="PAID" label={`שולמו (${paidOrders.length})`} />
+                <Tab value="QUOTATION" label={`הצעות מחיר (${quotationPendingOrders.length})`} />
+              </Tabs>
+            </Box>
             <Box sx={{ overflowY: 'auto', flexGrow: 1 }}>
               {displayedOrders.length === 0 ? (
                 <Alert severity="info" sx={{ borderRadius: 2, fontSize: 12 }}>{viewMeta[salesView].empty}</Alert>
-              ) : displayedOrders.slice(0, 8).map(order => (
+              ) : displayedOrders.map(order => (
                 <Box key={order._id} sx={{
                   display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                   py: 1.2, borderBottom: `1px solid ${CARD_COLORS[0].border}`,
@@ -496,6 +599,10 @@ const SalesDashboard = () => {
                       >
                         בצע הזמנה
                       </Button>
+                    ) : order.isPaid ? (
+                      <Typography sx={{ fontSize: 11, color: '#2E7D32', fontWeight: 700 }}>
+                        שולם
+                      </Typography>
                     ) : (
                       <IconButton size="small" sx={{ color: '#2E7D32' }} onClick={() => handleMarkAsPaid(order._id)}>
                         <PaidIcon fontSize="small" />
@@ -610,14 +717,23 @@ const SalesDashboard = () => {
             <TextField label="תאריך הזמנה *" type="date" fullWidth value={newOrderData.orderDate}
               onChange={handleNewOrderChange('orderDate')} InputLabelProps={{ shrink: true }}
               error={!!orderFormErrors.orderDate} helperText={orderFormErrors.orderDate} />
-            <TextField label="תאריך אספקה משוער *" type="date" fullWidth value={newOrderData.estimatedDeliveryDate}
-              onChange={handleNewOrderChange('estimatedDeliveryDate')} InputLabelProps={{ shrink: true }}
-              error={!!orderFormErrors.estimatedDeliveryDate} helperText={orderFormErrors.estimatedDeliveryDate} />
+            <TextField
+              label="תאריך אספקה משוער *"
+              type="date"
+              fullWidth
+              value={newOrderData.estimatedDeliveryDate}
+              onChange={handleNewOrderChange('estimatedDeliveryDate')}
+              InputLabelProps={{ shrink: true }}
+              error={!!orderFormErrors.estimatedDeliveryDate}
+              helperText={
+                orderFormErrors.estimatedDeliveryDate ||
+                'משוקלל על פי חישוב אספקה למוצר ספציפי זה'
+              }
+            />
             <Typography sx={{ fontWeight: 700, mt: 1 }}>פרטי הזמנה</Typography>
             {newOrderData.items.map((item, idx) => {
               const filteredModels = getFilteredModelsByType(item.productType);
               const selectedProduct = getProductById(item.catalogProductId);
-              const supportsUpholstery = ['מיטה', 'כסא'].includes(item.productType);
               const unitPrice = getUnitPrice(item);
               const lineTotal = getLineTotal(item);
               return (
@@ -643,22 +759,56 @@ const SalesDashboard = () => {
                     >
                       {filteredModels.map((model) => <MenuItem key={model._id} value={model._id}>{model.name}</MenuItem>)}
                     </TextField>
-                    {supportsUpholstery && selectedProduct?.needsFabricSelection && (
-                      <TextField
-                        select
-                        label="בחירת בד אחד (רשות)"
-                        value={item.selectedFabric}
-                        onChange={(e) => handleOrderItemChange(idx, 'selectedFabric', e.target.value)}
-                        error={!!orderFormErrors[`selectedFabric_${idx}`]}
-                        helperText={orderFormErrors[`selectedFabric_${idx}`] || ''}
-                      >
-                        <MenuItem value="">בחר בד אחד</MenuItem>
-                        {fabricMaterials.map((m) => (
-                          <MenuItem key={m._id} value={m._id}>
-                            {m.name}{m.code ? ` (${m.code})` : ''}
-                          </MenuItem>
-                        ))}
-                      </TextField>
+                    {productRequiresFabricSelection(item, selectedProduct) && (
+                      <Autocomplete
+                        options={getFabricOptionsForItem()}
+                        getOptionLabel={(m) => `${m.name}${m.code ? ` (${m.code})` : ''}`}
+                        value={fabricMaterials.find((m) => m._id === item.selectedFabric) || null}
+                        onChange={(_, val) => handleOrderItemChange(idx, 'selectedFabric', val?._id || '')}
+                        renderInput={(params) => (
+                          <TextField
+                            {...params}
+                            label="בחירת בד *"
+                            error={!!orderFormErrors[`selectedFabric_${idx}`]}
+                            helperText={orderFormErrors[`selectedFabric_${idx}`] || ''}
+                          />
+                        )}
+                        isOptionEqualToValue={(opt, val) => opt._id === val._id}
+                      />
+                    )}
+                    {productRequiresFormicaSelection(item, selectedProduct) && (
+                      <Autocomplete
+                        options={formicaModels}
+                        getOptionLabel={(m) => `${m.name}${m.code ? ` (${m.code})` : ''}`}
+                        value={formicaModels.find((m) => m._id === item.selectedFormica) || null}
+                        onChange={(_, val) => handleOrderItemChange(idx, 'selectedFormica', val?._id || '')}
+                        renderInput={(params) => (
+                          <TextField
+                            {...params}
+                            label="בחירת פורמייקה *"
+                            error={!!orderFormErrors[`selectedFormica_${idx}`]}
+                            helperText={orderFormErrors[`selectedFormica_${idx}`] || ''}
+                          />
+                        )}
+                        isOptionEqualToValue={(opt, val) => opt._id === val._id}
+                      />
+                    )}
+                    {productRequiresHandleSelection(item, selectedProduct) && (
+                      <Autocomplete
+                        options={handleMaterials}
+                        getOptionLabel={(m) => `${m.name}${m.code ? ` (${m.code})` : ''}`}
+                        value={handleMaterials.find((m) => m._id === item.selectedHandle) || null}
+                        onChange={(_, val) => handleOrderItemChange(idx, 'selectedHandle', val?._id || '')}
+                        renderInput={(params) => (
+                          <TextField
+                            {...params}
+                            label="בחירת ידית *"
+                            error={!!orderFormErrors[`selectedHandle_${idx}`]}
+                            helperText={orderFormErrors[`selectedHandle_${idx}`] || ''}
+                          />
+                        )}
+                        isOptionEqualToValue={(opt, val) => opt._id === val._id}
+                      />
                     )}
                     <TextField
                       label="כמות"
@@ -752,16 +902,7 @@ const SalesDashboard = () => {
           100% { transform: scale(1); }
         }
       `}</style>
-      <Snackbar
-        open={!!submitHint}
-        autoHideDuration={3200}
-        onClose={() => setSubmitHint('')}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
-      >
-        <Alert severity="warning" onClose={() => setSubmitHint('')}>
-          {submitHint}
-        </Alert>
-      </Snackbar>
+      <FeedbackSnackbar />
     </Box>
   );
 };

@@ -1,6 +1,7 @@
 import express from "express";
 import {
   getMyOrders,
+  getMyProfile,
   markReceived,
   markDone,
   getNotifications,
@@ -22,6 +23,7 @@ router.use(authenticate);
 router.use(authorizeRoles("CARPENTER"));
 
 // ניהול הזמנות
+router.get("/profile", getMyProfile);
 router.get("/my-orders", getMyOrders); // הזמנות פעילות
 router.get("/completed-orders", getCompletedOrders); // היסטוריה
 router.patch("/orders/:orderId/received", markReceived); // סימון קבלת משלוח

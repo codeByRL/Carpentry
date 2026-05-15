@@ -19,6 +19,15 @@ API.interceptors.request.use(
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
+    // ⚠️ כשמועבר FormData, אסור לכפות Content-Type=application/json:
+    // צריך לתת לדפדפן/אקסיוס לבנות multipart/form-data עם boundary מתאים.
+    // אחרת המולטר בשרת לא יפענח את הקובץ ו־req.body.image יגיע כאובייקט ריק.
+    if (typeof FormData !== 'undefined' && config.data instanceof FormData) {
+      if (config.headers) {
+        delete config.headers['Content-Type'];
+        delete config.headers['content-type'];
+      }
+    }
     return config;
   },
   (error) => {

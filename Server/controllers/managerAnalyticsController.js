@@ -1,4 +1,5 @@
 import * as analyticsService from "../services/managerAnalyticsService.js";
+import { computeCarpenterWorkloadHours } from "../services/orderService.js";
 import User from "../models/User.js";
 import Order from "../models/Order.js";
 import multer from "multer";
@@ -36,6 +37,17 @@ export const getAllEmployees = async (req, res) => {
       .populate("warehouse")
       .select("-password")
       .sort({ createdAt: -1 });
+
+    await Promise.all(
+      employees.map(async (emp) => {
+        if (emp.role !== "CARPENTER") return;
+        const liveHours = await computeCarpenterWorkloadHours(emp._id);
+        if (emp.currentWorkloadHours !== liveHours) {
+          emp.currentWorkloadHours = liveHours;
+          await User.updateOne({ _id: emp._id }, { $set: { currentWorkloadHours: liveHours } });
+        }
+      })
+    );
 
     res.json(employees);
   } catch (error) {

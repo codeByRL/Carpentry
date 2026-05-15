@@ -13,6 +13,7 @@ import VisibilityIcon from '@mui/icons-material/Visibility';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 
 import { fetchAllOrders } from '../store/slices/ordersSlice';
+import PageHeader from '../components/PageHeader.jsx';
 
 const STATUS_LABELS = {
   QUOTATION_PENDING: { label: 'בהצעת מחיר', color: 'warning' },
@@ -31,6 +32,7 @@ const ManagerOrders = () => {
   const { orders, loading, error } = useSelector(state => state.orders);
 
   const [statusFilter, setStatusFilter] = useState('ALL');
+  const [ordersTab, setOrdersTab] = useState('ACTIVE');
   const [search, setSearch] = useState('');
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [viewOpen, setViewOpen] = useState(false);
@@ -42,27 +44,40 @@ const ManagerOrders = () => {
 
   useEffect(() => {
     const initial = location.state?.initialStatusFilter;
+    const initialOrdersTab = location.state?.initialOrdersTab;
     const msg = location.state?.emptyText;
     if (initial) setStatusFilter(initial);
+    if (initialOrdersTab) setOrdersTab(initialOrdersTab);
     if (msg) setEmptyText(msg);
   }, [location.state]);
 
   const now = new Date();
 
   const activeOrders = orders.filter(order => order.status !== 'DONE');
+  const completedOrders = orders.filter(order => order.status === 'DONE');
+  const sourceOrders = ordersTab === 'COMPLETED' ? completedOrders : activeOrders;
 
-  const pausedByIssueCount = activeOrders.filter(o => o.carpenterPaused).length;
+  const pausedByIssueCount = sourceOrders.filter(o => o.carpenterPaused).length;
+  const paidCount = sourceOrders.filter(o => !!o.isPaid).length;
 
-  const filtered = activeOrders.filter(order => {
+  const filtered = sourceOrders.filter(order => {
     const matchStatus =
       statusFilter === 'ALL' ||
-      (statusFilter === 'CARPENTER_PAUSED' ? order.carpenterPaused : order.status === statusFilter);
+      (statusFilter === 'CARPENTER_PAUSED'
+        ? order.carpenterPaused
+        : statusFilter === 'PAID'
+          ? !!order.isPaid
+          : order.status === statusFilter);
     const matchSearch =
       order.customer?.name?.toLowerCase().includes(search.toLowerCase()) ||
       order.customer?.phone1?.includes(search) ||
       order._id?.includes(search);
     return matchStatus && matchSearch;
   });
+
+  const statusEntriesForFilter = Object.entries(STATUS_LABELS).filter(([key]) =>
+    ordersTab === 'COMPLETED' ? key === 'DONE' : key !== 'DONE'
+  );
 
   const isDeliveryUrgent = (order) => {
     if (!order.estimatedDeliveryDate || order.status === 'DONE') return false;
@@ -82,12 +97,29 @@ const ManagerOrders = () => {
   );
 
   return (
-    <Box>
-      <Typography variant="h5" sx={{ mb: 3, fontWeight: 'bold', color: '#5D4037' }}>
-        📋 הזמנות פעילות
-      </Typography>
+    <Box sx={{ width: '100%', maxWidth: '100%', minWidth: 0 }}>
+      <PageHeader
+        title="ניהול הזמנות"
+        description="סינון לפי סטטוס ולשוניות פעילות/הושלמו, חיפוש מהיר ופרטי הזמנה מלאים."
+      />
 
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+
+      <Box sx={{ mb: 2, overflowX: 'auto' }}>
+        <ToggleButtonGroup
+          value={ordersTab}
+          exclusive
+          onChange={(_, val) => {
+            if (!val) return;
+            setOrdersTab(val);
+            setStatusFilter('ALL');
+          }}
+          size="small"
+        >
+          <ToggleButton value="ACTIVE">הזמנות פעילות ({activeOrders.length})</ToggleButton>
+          <ToggleButton value="COMPLETED">הזמנות שהסתיימו ({completedOrders.length})</ToggleButton>
+        </ToggleButtonGroup>
+      </Box>
 
       {/* ─── חיפוש ───────────────────────── */}
       <TextField
@@ -114,7 +146,16 @@ const ManagerOrders = () => {
           onChange={(_, val) => val && setStatusFilter(val)}
           size="small"
         >
-          <ToggleButton value="ALL">הכל ({activeOrders.length})</ToggleButton>
+          <ToggleButton value="ALL">הכל ({sourceOrders.length})</ToggleButton>
+          <ToggleButton value="PAID">
+            <Chip
+              label={paidCount}
+              size="small"
+              color="success"
+              sx={{ mr: 0.5, height: 18, fontSize: 11 }}
+            />
+            שולם
+          </ToggleButton>
           <ToggleButton value="CARPENTER_PAUSED">
             <Chip
               label={pausedByIssueCount}
@@ -124,8 +165,8 @@ const ManagerOrders = () => {
             />
             מושהות בשל תקלה
           </ToggleButton>
-          {Object.entries(STATUS_LABELS).map(([key, { label, color }]) => {
-            const count = activeOrders.filter(o => o.status === key).length;
+          {statusEntriesForFilter.map(([key, { label, color }]) => {
+            const count = sourceOrders.filter(o => o.status === key).length;
             return (
               <ToggleButton key={key} value={key}>
                 <Chip label={count} size="small" color={color} sx={{ mr: 0.5, height: 18, fontSize: 11 }} />
@@ -238,8 +279,16 @@ const ManagerOrders = () => {
                         color={STATUS_LABELS[order.status]?.color || 'default'}
                         size="small"
                       />
+                      {order.isPaid && (
+                        <Chip label="שולם" size="small" color="success" variant="outlined" />
+                      )}
                       {order.carpenterPaused && (
-                        <Chip label="מושהה בשל תקלה" size="small" color="error" variant="outlined" />
+                        <Chip
+                          label="מושהה בשל תקלה"
+                          size="small"
+                          variant="outlined"
+                          sx={{ borderColor: "#D2691E", color: "#D2691E", fontWeight: 600 }}
+                        />
                       )}
                     </Box>
                   </TableCell>
@@ -293,6 +342,15 @@ const ManagerOrders = () => {
               sx={{ ml: 2 }}
             />
           )}
+          {selectedOrder?.isPaid && (
+            <Chip
+              label="שולם"
+              color="success"
+              variant="outlined"
+              size="small"
+              sx={{ ml: 1 }}
+            />
+          )}
         </DialogTitle>
 
         <DialogContent sx={{ mt: 2 }}>
@@ -300,16 +358,24 @@ const ManagerOrders = () => {
             <Grid container spacing={3}>
               {selectedOrder.carpenterPaused && (
                 <Grid item xs={12}>
-                  <Alert severity="warning" sx={{ borderRadius: 2 }}>
-                    <Typography variant="body2" sx={{ fontWeight: 700, mb: 0.5 }}>
+                  <Box
+                    sx={{
+                      p: 2,
+                      borderRadius: 2,
+                      border: "1px solid #E8C9B0",
+                      bgcolor: "#FFF8F0",
+                      boxShadow: "inset 3px 0 0 #D2691E",
+                    }}
+                  >
+                    <Typography variant="body2" sx={{ fontWeight: 700, mb: 0.5, color: "#D2691E" }}>
                       העבודה מושהית אצל הנגר בשל תקלה
                     </Typography>
-                    <Typography variant="body2">
+                    <Typography variant="body2" sx={{ color: "#A0522D" }}>
                       {selectedOrder.carpenterPauseReason?.trim()
                         ? `סיבה: ${selectedOrder.carpenterPauseReason}`
                         : 'לא צוינה סיבה'}
                     </Typography>
-                  </Alert>
+                  </Box>
                 </Grid>
               )}
 
@@ -416,7 +482,7 @@ const ManagerOrders = () => {
                       <TableBody>
                         {selectedOrder.requiredMaterials.map((mat, i) => (
                           <TableRow key={i}>
-                            <TableCell>{mat.baseProduct?.name || '—'}</TableCell>
+                            <TableCell>{mat.product?.name || mat.product?.code || '—'}</TableCell>
                             <TableCell>{mat.quantity}</TableCell>
                             <TableCell>
                               <Chip

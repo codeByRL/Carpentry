@@ -1,6 +1,8 @@
 import Order from "../models/Order.js";
+import { broadcastOrderUpdated } from "../utils/realtimeEvents.js";
 import User from "../models/User.js";
 import DeliveryRun from "../models/DeliveryRun.js";
+import Warehouse from "../models/Warehouse.js";
 import NodeGeocoder from "node-geocoder";
 import axios from "axios";
 
@@ -18,6 +20,22 @@ const OSRM_BASE_URL = "https://router.project-osrm.org";
 const WAREHOUSE_ADDRESS_LABEL = "מחסן ראשי";
 /** לא משמש כברירת מחדל לתכנון מסלול נהג — רק לגאו-קוד של עצירות ללא כתובת */
 const FALLBACK_MAP_CENTER = { lat: 32.0853, lng: 34.7818 };
+
+let cachedPrimaryWarehouse = null;
+let warehouseCacheAt = 0;
+const WAREHOUSE_CACHE_MS = 5 * 60 * 1000;
+
+const getPrimaryWarehouse = async () => {
+  if (cachedPrimaryWarehouse && Date.now() - warehouseCacheAt < WAREHOUSE_CACHE_MS) {
+    return cachedPrimaryWarehouse;
+  }
+  const wh = await Warehouse.findOne({ isActive: true }).sort({ createdAt: 1 }).lean();
+  cachedPrimaryWarehouse = wh
+    ? { name: wh.name, address: wh.address }
+    : { name: WAREHOUSE_ADDRESS_LABEL, address: WAREHOUSE_ADDRESS_LABEL };
+  warehouseCacheAt = Date.now();
+  return cachedPrimaryWarehouse;
+};
 
 /** מזהה מחרוזות כמו "31.69700, 35.11500" או "31.697, 35.115 (מיקום נוכחי)" */
 const parseLatLngFromText = (text) => {
@@ -99,10 +117,75 @@ const KNOWN_START_CITIES = [
 const lookupKnownCityCoords = (text) => {
   const norm = String(text || "").trim();
   if (!norm) return null;
+  if (hasSubstantialStreetDetail(norm)) return null;
   const hit = KNOWN_START_CITIES.find(
     (c) => norm === c.label || norm.includes(c.label) || c.label.includes(norm)
   );
   return hit ? { lat: hit.lat, lng: hit.lng } : null;
+};
+
+/** כתובת עם רחוב/מספר — לא להחליף במרכז עיר */
+const hasSubstantialStreetDetail = (text) => {
+  const t = String(text || "").trim();
+  if (!t) return false;
+  if (/\d/.test(t)) return true;
+  if (/רחו['\u05f3]?ב|רח׳|שדרות|שד['\u05f3]?|דרך|סמט|מבוא|כיכר|בניין|קומה/i.test(t)) return true;
+  const parts = t.split(/[,،]/).map((p) => p.trim()).filter(Boolean);
+  if (parts.length >= 2) {
+    const isKnownCity = (p) =>
+      KNOWN_START_CITIES.some(
+        (c) => p === c.label || p.includes(c.label) || c.label.includes(p)
+      );
+    if (parts.some((p) => !isKnownCity(p) && p.length > 1)) return true;
+  }
+  return false;
+};
+
+const formatAddressForWaze = (address) => {
+  const addr = cleanAddressForGeocode(address);
+  if (!addr) return "";
+  if (!/ישראל|israel/i.test(addr)) return `${addr}, ישראל`;
+  return addr;
+};
+
+const rankGeocodeHit = (pick) => {
+  const type = String(pick?.type || pick?.raw?.type || "").toLowerCase();
+  const cls = String(pick?.class || pick?.raw?.class || "").toLowerCase();
+  let score = Number(pick?.importance ?? pick?.raw?.importance) || 0;
+  if (cls === "highway" || /house|residential|street|road|building/.test(type)) score += 10;
+  if (/city|town|village|administrative/.test(type)) score -= 5;
+  return score;
+};
+
+const geocodeCache = new Map();
+
+/** קואורדינטות לחישוב מסלול — עיר ידועה קודם, גאו-קוד רק אם צריך */
+const coordsForAddress = async (address, existing = null) => {
+  if (
+    existing?.lat != null &&
+    existing?.lng != null &&
+    Number.isFinite(existing.lat) &&
+    Number.isFinite(existing.lng)
+  ) {
+    return { lat: existing.lat, lng: existing.lng };
+  }
+  const cleaned = cleanAddressForGeocode(address);
+  if (!cleaned) return null;
+
+  const known = lookupKnownCityCoords(cleaned);
+  if (known) return known;
+
+  if (geocodeCache.has(cleaned)) return geocodeCache.get(cleaned);
+
+  const geo = await geocodeAddress(cleaned);
+  if (geo) {
+    geocodeCache.set(cleaned, geo);
+    return geo;
+  }
+
+  const fallback = lookupKnownCityCoords(cleaned);
+  if (fallback) geocodeCache.set(cleaned, fallback);
+  return fallback;
 };
 
 /** מסיר שאריות מ-GPS ותווי כיווניות לפני גאו-קוד */
@@ -130,6 +213,7 @@ const geocodeWithNominatim = async (query) => {
   });
   const rows = Array.isArray(res.data) ? res.data : [];
   if (!rows.length) return null;
+  rows.sort((a, b) => rankGeocodeHit(b) - rankGeocodeHit(a));
   const pick = rows[0];
   const lat = Number(pick.lat);
   const lng = Number(pick.lon);
@@ -164,7 +248,9 @@ const geocodeAddress = async (address) => {
         });
         if (res?.length) {
           const inIsrael = res.filter((r) => r.countryCode === "IL");
-          const pick = inIsrael[0] || res[0];
+          const candidates = inIsrael.length ? inIsrael : res;
+          candidates.sort((a, b) => rankGeocodeHit(b) - rankGeocodeHit(a));
+          const pick = candidates[0];
           const lat = pick?.latitude;
           const lng = pick?.longitude;
           if (typeof lat === "number" && typeof lng === "number") {
@@ -179,10 +265,10 @@ const geocodeAddress = async (address) => {
       if (nominatim) return nominatim;
     }
 
-    return null;
+    return lookupKnownCityCoords(trimmed);
   } catch (error) {
     console.error("Geocoding error:", error.message);
-    return null;
+    return lookupKnownCityCoords(cleanAddressForGeocode(address));
   }
 };
 
@@ -203,6 +289,45 @@ const calculateDistance = (lat1, lng1, lat2, lng2) => {
 
 const estimateLegHours = (km) => km / AVG_CITY_SPEED_KMPH;
 const estimateStopServiceHours = () => STOP_SERVICE_MINUTES / 60;
+
+const stationCoords = (station) => {
+  if (
+    station?.lat != null &&
+    station?.lng != null &&
+    Number.isFinite(station.lat) &&
+    Number.isFinite(station.lng)
+  ) {
+    return { lat: station.lat, lng: station.lng };
+  }
+  return lookupKnownCityCoords(station?.address);
+};
+
+const driveHoursBetweenCoords = (from, to) => {
+  if (!from || !to) return Infinity;
+  const km = calculateDistance(from.lat, from.lng, to.lat, to.lng);
+  return estimateLegHours(km);
+};
+
+/** זמן מלא להובלה: נסיעה→תחנה1 + עצירה + נסיעה→תחנה2 + עצירה */
+const estimateJobHoursFrom = (fromCoords, stop) => {
+  const s1 = stationCoords(stop.station1);
+  const s2 = stationCoords(stop.station2);
+  if (!s1 || !s2) return Infinity;
+  const leg1 = driveHoursBetweenCoords(fromCoords, s1);
+  const leg2 = driveHoursBetweenCoords(s1, s2);
+  const service = estimateStopServiceHours();
+  return leg1 + service + leg2 + service;
+};
+
+const estimateJobDistanceKmFrom = (fromCoords, stop) => {
+  const s1 = stationCoords(stop.station1);
+  const s2 = stationCoords(stop.station2);
+  if (!s1 || !s2) return 0;
+  return (
+    calculateDistance(fromCoords.lat, fromCoords.lng, s1.lat, s1.lng) +
+    calculateDistance(s1.lat, s1.lng, s2.lat, s2.lng)
+  );
+};
 
 /**
  * אלגוריתם Nearest Neighbor לסידור עצירות
@@ -257,8 +382,7 @@ const chooseOptimizedStopsWithinHours = (stops, desiredHours, startLat, startLng
     const candidate = remaining[nearestIndex];
     const nextTotalHours = totalHours + estimateLegHours(nearestDistance) + estimateStopServiceHours();
 
-    // תמיד ניקח לפחות עצירה אחת, גם אם ההערכה חורגת.
-    if (chosen.length > 0 && nextTotalHours > desiredHours) {
+    if (nextTotalHours > desiredHours) {
       break;
     }
 
@@ -386,8 +510,7 @@ const greedyChooseWithinHours = (stops, matrix, desiredHours) => {
       const driveHours = matrix.durationHours[currentMatrixIdx][stopIdx + 1];
       if (!Number.isFinite(driveHours)) continue;
       const nextTotal = totalHours + driveHours + serviceHours;
-      // תמיד ניקח לפחות אחת — גם אם חרגנו במעט. אחרי הראשונה אכוף את התקרה.
-      if (chosen.length === 0 || nextTotal <= desiredHours) {
+      if (nextTotal <= desiredHours) {
         picked = stopIdx;
         totalHours = nextTotal;
         totalDistanceKm += matrix.distanceKm[currentMatrixIdx][stopIdx + 1] || 0;
@@ -415,7 +538,7 @@ const trimStopsByHours = (orderedStops, legDurationsHours, legDistancesKm, desir
     const serviceHours = estimateStopServiceHours();
     const nextTotal = totalHours + driveHours + serviceHours;
 
-    if (trimmed.length > 0 && nextTotal > desiredHours) break;
+    if (nextTotal > desiredHours) break;
 
     trimmed.push(orderedStops[i]);
     totalHours = nextTotal;
@@ -504,7 +627,7 @@ export const getDriverRoute = async (driverId) => {
     driver: driverId,
     status: { $in: ["PENDING", "IN_PROGRESS"] },
   }).populate(DRIVER_RUN_ORDER_POPULATE);
-  return formatRunForDriverApi(run);
+  return await formatRunForDriverApi(run);
 };
 
 export const completeStop = async (runId, stopRef, driverId) => {
@@ -526,7 +649,7 @@ export const completeStop = async (runId, stopRef, driverId) => {
   }
   if (run.stops[stopIndex].status === "COMPLETED") {
     await run.populate(DRIVER_RUN_ORDER_POPULATE);
-    return formatRunForDriverApi(run);
+    return await formatRunForDriverApi(run);
   }
 
   run.stops[stopIndex].status = "COMPLETED";
@@ -563,7 +686,8 @@ export const completeStop = async (runId, stopRef, driverId) => {
     });
   }
   await run.populate(DRIVER_RUN_ORDER_POPULATE);
-  return formatRunForDriverApi(run);
+  broadcastOrderUpdated({ orderId: String(orderId), kind: "delivery_stop_completed" });
+  return await formatRunForDriverApi(run);
 };
 
 const startOfDay = (d = new Date()) => {
@@ -577,10 +701,138 @@ const endOfDay = (d = new Date()) => {
   return x;
 };
 
-const buildWazeUrl = (lat, lng, address) =>
-  lat && lng
-    ? `https://waze.com/ul?ll=${lat},${lng}&navigate=yes`
-    : `https://waze.com/ul?q=${encodeURIComponent(address)}&navigate=yes`;
+const buildWazeUrl = (_lat, _lng, address) => {
+  const wazeAddr = formatAddressForWaze(address);
+  if (wazeAddr) {
+    return `https://waze.com/ul?q=${encodeURIComponent(wazeAddr)}&navigate=yes`;
+  }
+  const lat = Number(_lat);
+  const lng = Number(_lng);
+  if (Number.isFinite(lat) && Number.isFinite(lng)) {
+    return `https://waze.com/ul?ll=${lat},${lng}&navigate=yes`;
+  }
+  return "";
+};
+
+const buildStation = (stationType, label, name, address, coords) => ({
+  stationType,
+  label,
+  name: name || label,
+  address: address || "—",
+  lat: coords?.lat ?? null,
+  lng: coords?.lng ?? null,
+  wazeUrl: buildWazeUrl(coords?.lat, coords?.lng, address),
+});
+
+/** שתי תחנות לכל הובלה: מחסן→נגר או נגר→לקוח */
+const enrichStopStations = async (stop) => {
+  const wh = await getPrimaryWarehouse();
+  const whAddr = String(wh.address || WAREHOUSE_ADDRESS_LABEL).trim();
+  const whName = String(wh.name || WAREHOUSE_ADDRESS_LABEL).trim();
+  const order =
+    stop.orderDoc ||
+    (stop.order && typeof stop.order === "object" ? stop.order : null);
+
+  if (stop.deliveryType === "TO_CARPENTER") {
+    const destAddr = String(
+      stop.destinationAddress || stop.address || order?.assignedCarpenter?.address || ""
+    ).trim();
+    const contactName = stop.contactName || order?.assignedCarpenter?.fullName || "נגר";
+    const contactPhone = stop.contactPhone || order?.assignedCarpenter?.phone || "";
+    const whCoords = await coordsForAddress(whAddr);
+    const destCoords = await coordsForAddress(destAddr, {
+      lat: stop.lat,
+      lng: stop.lng,
+    });
+    const station1 = buildStation("WAREHOUSE", "מחסן", whName, whAddr, whCoords);
+    const station2 = buildStation("CARPENTER", "נגר", contactName, destAddr, destCoords);
+    return {
+      ...stop,
+      station1,
+      station2,
+      sourceType: "WAREHOUSE",
+      sourceAddress: whAddr,
+      destinationType: "CARPENTER",
+      destinationAddress: destAddr,
+      address: destAddr,
+      lat: station2.lat,
+      lng: station2.lng,
+      contactName,
+      contactPhone,
+      wazeUrl: station2.wazeUrl,
+      orderDoc: undefined,
+    };
+  }
+
+  if (stop.deliveryType === "TO_CUSTOMER") {
+    const carpenterAddr = String(
+      stop.sourceAddress || order?.assignedCarpenter?.address || ""
+    ).trim();
+    const customerAddr = String(
+      stop.destinationAddress || stop.address || order?.customer?.deliveryAddress || ""
+    ).trim();
+    const carpenterName = order?.assignedCarpenter?.fullName || "נגר";
+    const customerName = stop.contactName || order?.customer?.name || "לקוח";
+    const customerPhone = stop.contactPhone || order?.customer?.phone1 || "";
+    const carpenterCoords = carpenterAddr ? await coordsForAddress(carpenterAddr) : null;
+    const customerCoords = await coordsForAddress(customerAddr, {
+      lat: stop.lat,
+      lng: stop.lng,
+    });
+    const station1 = buildStation("CARPENTER", "נגר", carpenterName, carpenterAddr, carpenterCoords);
+    const station2 = buildStation("CUSTOMER", "לקוח", customerName, customerAddr, customerCoords);
+    return {
+      ...stop,
+      station1,
+      station2,
+      sourceType: "CARPENTER",
+      sourceAddress: carpenterAddr,
+      destinationType: "CUSTOMER",
+      destinationAddress: customerAddr,
+      address: customerAddr,
+      lat: station2.lat,
+      lng: station2.lng,
+      contactName: customerName,
+      contactPhone: customerPhone,
+      wazeUrl: station2.wazeUrl,
+      orderDoc: undefined,
+    };
+  }
+
+  return stop;
+};
+
+const greedyChooseJobsWithinHours = (stops, driverStart, desiredHours) => {
+  const chosen = [];
+  const remaining = stops.map((_, i) => i);
+  let current = driverStart;
+  let totalHours = 0;
+  let totalDistanceKm = 0;
+
+  while (remaining.length && chosen.length < MAX_STOPS_PER_DRIVER) {
+    const ranked = [...remaining].sort(
+      (a, b) => estimateJobHoursFrom(current, stops[a]) - estimateJobHoursFrom(current, stops[b])
+    );
+    let picked = -1;
+    for (const idx of ranked) {
+      const jobHours = estimateJobHoursFrom(current, stops[idx]);
+      if (!Number.isFinite(jobHours) || jobHours === Infinity) continue;
+      if (totalHours + jobHours <= desiredHours) {
+        picked = idx;
+        totalHours += jobHours;
+        totalDistanceKm += estimateJobDistanceKmFrom(current, stops[idx]);
+        break;
+      }
+    }
+    if (picked === -1) break;
+    chosen.push(stops[picked]);
+    const s2 = stationCoords(stops[picked].station2);
+    if (s2) current = s2;
+    remaining.splice(remaining.indexOf(picked), 1);
+  }
+
+  return { stops: chosen, totalHours, totalDistanceKm };
+};
 
 /** כמו ב-pool הממתין: כתובת לקוח / כתובת נגר מהמסמכים העדכניים, לא מעותק בשכבת העצירה */
 const DRIVER_RUN_ORDER_POPULATE = {
@@ -588,66 +840,91 @@ const DRIVER_RUN_ORDER_POPULATE = {
   populate: { path: "assignedCarpenter", select: "fullName address phone" },
 };
 
-const refreshStopDisplayFromOrder = (stop) => {
-  const out = { ...stop };
-  const order = out.order;
-  if (!order || typeof order !== "object") return out;
+const refreshStopDisplayFromOrder = async (stop) => {
+  const out = stop?.toObject ? stop.toObject() : { ...stop };
+  const order =
+    out.order && typeof out.order === "object"
+      ? out.order
+      : out.orderDoc && typeof out.orderDoc === "object"
+        ? out.orderDoc
+        : null;
 
-  if (out.deliveryType === "TO_CUSTOMER") {
-    const addr = order.customer?.deliveryAddress
-      ? String(order.customer.deliveryAddress).trim()
-      : "";
-    if (addr) {
-      const sourceAddress =
-        order.assignedCarpenter?.address != null
-          ? String(order.assignedCarpenter.address).trim()
-          : "";
-      out.address = addr;
-      out.sourceType = "CARPENTER";
-      out.sourceAddress = sourceAddress || out.sourceAddress || "";
-      out.destinationType = "CUSTOMER";
-      out.destinationAddress = addr;
+  if (order) {
+    if (out.deliveryType === "TO_CUSTOMER") {
+      out.sourceAddress = order.assignedCarpenter?.address || out.sourceAddress || "";
+      out.destinationAddress =
+        order.customer?.deliveryAddress || out.destinationAddress || out.address || "";
       out.contactName = order.customer?.name || out.contactName || "לקוח";
-      out.contactPhone =
-        order.customer?.phone1 != null
-          ? String(order.customer.phone1)
-          : out.contactPhone || "";
-      out.lat = null;
-      out.lng = null;
-      out.wazeUrl = buildWazeUrl(null, null, addr);
+      out.contactPhone = order.customer?.phone1 || out.contactPhone || "";
     }
+    if (out.deliveryType === "TO_CARPENTER") {
+      out.destinationAddress =
+        order.assignedCarpenter?.address || out.destinationAddress || out.address || "";
+      out.contactName = order.assignedCarpenter?.fullName || out.contactName || "נגר";
+      out.contactPhone = order.assignedCarpenter?.phone || out.contactPhone || "";
+    }
+  }
+
+  if (out.station1?.address && out.station2?.address) {
+    out.station1 = {
+      ...out.station1,
+      wazeUrl: buildWazeUrl(out.station1.lat, out.station1.lng, out.station1.address),
+    };
+    out.station2 = {
+      ...out.station2,
+      wazeUrl: buildWazeUrl(out.station2.lat, out.station2.lng, out.station2.address),
+    };
+    delete out.orderDoc;
     return out;
   }
 
-  if (out.deliveryType === "TO_CARPENTER") {
-    const c = order.assignedCarpenter;
-    if (c && typeof c === "object") {
-      const addr = c.address ? String(c.address).trim() : "";
-      if (addr) {
-        out.address = addr;
-        out.sourceType = "WAREHOUSE";
-        out.sourceAddress = out.sourceAddress || WAREHOUSE_ADDRESS_LABEL;
-        out.destinationType = "CARPENTER";
-        out.destinationAddress = addr;
-        out.contactName = c.fullName || out.contactName || "נגר";
-        out.contactPhone =
-          c.phone != null ? String(c.phone) : out.contactPhone || "";
-        out.lat = null;
-        out.lng = null;
-        out.wazeUrl = buildWazeUrl(null, null, addr);
-      }
-    }
-    return out;
-  }
-
-  return out;
+  return enrichStopStations({ ...out, orderDoc: order });
 };
 
-const formatRunForDriverApi = (run) => {
+const formatRunForDriverApi = async (run) => {
   if (!run) return null;
   const o = run.toObject ? run.toObject() : { ...run };
-  o.stops = (o.stops || []).map((s) => refreshStopDisplayFromOrder(s));
+  o.stops = await Promise.all(
+    (o.stops || []).map(async (s) => {
+      try {
+        return await refreshStopDisplayFromOrder(s);
+      } catch (err) {
+        console.warn("refreshStopDisplayFromOrder:", err?.message || err);
+        return s?.toObject ? s.toObject() : { ...s };
+      }
+    })
+  );
   return o;
+};
+
+/** סוגר מסלולים פתוחים של הנהג להיום — רק לפני יצירת מסלול חדש מוצלח */
+const closeDriverOpenRunsToday = async (driverId, todayStart, todayEnd) => {
+  const openRunsToday = await DeliveryRun.find({
+    driver: driverId,
+    date: { $gte: todayStart, $lte: todayEnd },
+    status: { $in: ["PENDING", "IN_PROGRESS"] },
+  })
+    .select("_id stops")
+    .lean();
+
+  for (const run of openRunsToday) {
+    const orderIds = (run.stops || [])
+      .filter((s) => s.status !== "COMPLETED")
+      .map((s) => s.order)
+      .filter(Boolean);
+    if (orderIds.length) {
+      await Order.updateMany(
+        { _id: { $in: orderIds }, deliveryClaimedBy: driverId },
+        { $set: { deliveryClaimedBy: null, deliveryClaimedAt: null } }
+      );
+    }
+  }
+  if (openRunsToday.length) {
+    await DeliveryRun.updateMany(
+      { _id: { $in: openRunsToday.map((r) => r._id) } },
+      { $set: { status: "COMPLETED" } }
+    );
+  }
 };
 
 /**
@@ -663,8 +940,7 @@ const classifyOrderAsStop = async (order) => {
     if (!order.isPaid) return null;
     const customerAddress = order.customer?.deliveryAddress || "";
     if (!customerAddress.trim()) return null;
-    const coords = await geocodeAddress(customerAddress);
-    return {
+    return enrichStopStations({
       order: order._id,
       deliveryType: "TO_CUSTOMER",
       address: customerAddress,
@@ -674,10 +950,8 @@ const classifyOrderAsStop = async (order) => {
       destinationAddress: customerAddress,
       contactName: order.customer?.name || "לקוח",
       contactPhone: order.customer?.phone1 || "",
-      lat: coords?.lat || null,
-      lng: coords?.lng || null,
-      wazeUrl: buildWazeUrl(coords?.lat, coords?.lng, customerAddress),
-    };
+      orderDoc: order,
+    });
   }
 
   if (order.receivedByCarpenter) return null;
@@ -685,8 +959,7 @@ const classifyOrderAsStop = async (order) => {
 
   const targetAddress = order.assignedCarpenter?.address || "";
   if (!targetAddress.trim()) return null;
-  const coords = await geocodeAddress(targetAddress);
-  return {
+  return enrichStopStations({
     order: order._id,
     deliveryType: "TO_CARPENTER",
     address: targetAddress,
@@ -696,18 +969,75 @@ const classifyOrderAsStop = async (order) => {
     destinationAddress: targetAddress,
     contactName: order.assignedCarpenter?.fullName || "נגר",
     contactPhone: order.assignedCarpenter?.phone || "",
-    lat: coords?.lat || null,
-    lng: coords?.lng || null,
-    wazeUrl: buildWazeUrl(coords?.lat, coords?.lng, targetAddress),
-  };
+    orderDoc: order,
+  });
 };
 
 /**
- * ניקוי "תקיעות": מסלולי הובלה ב-PENDING ללא תזוזה במשך יותר מ-ABANDONED_RUN_AGE_MS
- * נחשבים נטושים — סוגרים אותם ומשחררים את ה-claims על ההזמנות, כדי שיחזרו לבריכה.
- * רץ כתופעת לוואי שקטה לפני קריאה לבריכה, כדי שהמערכת תרפא את עצמה.
+ * שחרור אוטומטי של הובלות שלא בוצעו — חוזרות לבריכה בלי התערבות ידנית.
+ *
+ * כלל יחיד: מסלול מיום קודם (או ישן יותר) שלא הושלם → נסגר, תפיסות משוחררות.
+ * מסלול של היום נשאר תפוס עד סיום או עד מעבר תאריך לוח (גם אם התחיל בבוקר וסיים בצהריים).
  */
 const ABANDONED_RUN_AGE_MS = 24 * 60 * 60 * 1000;
+
+export const DRIVER_DAY_MISSED_NOTICE =
+  "לא ביצעת את מטלותיך ביום המיועד. המערכת לא שומרת נסיעות שמורות ליותר מיממה — תפוס לעצמך שוב נסיעות להיום.";
+
+const releaseOrdersFromRun = async (run) => {
+  const orderIds = (run.stops || [])
+    .filter((s) => s.status !== "COMPLETED")
+    .map((s) => s.order)
+    .filter(Boolean);
+  if (orderIds.length) {
+    await Order.updateMany(
+      { _id: { $in: orderIds }, deliveryClaimedBy: run.driver },
+      { $set: { deliveryClaimedBy: null, deliveryClaimedAt: null } }
+    );
+  }
+  await DeliveryRun.updateOne({ _id: run._id }, { $set: { status: "COMPLETED" } });
+  const hadOpenWork = (run.stops || []).some((s) => s.status !== "COMPLETED");
+  return { orderCount: orderIds.length, driverId: run.driver, hadOpenWork };
+};
+
+const notifyDriversDayMissed = async (driverIds) => {
+  const unique = [...new Set(driverIds.filter(Boolean).map(String))];
+  if (!unique.length) return;
+  await User.updateMany(
+    { _id: { $in: unique } },
+    { $set: { driverDeliveryNotice: DRIVER_DAY_MISSED_NOTICE } }
+  );
+};
+
+const releaseExpiredDeliveryRuns = async () => {
+  const todayStart = startOfDay();
+
+  let releasedOrders = 0;
+  const driversToNotify = [];
+
+  const pastRuns = await DeliveryRun.find({
+    date: { $lt: todayStart },
+    status: { $in: ["PENDING", "IN_PROGRESS"] },
+  })
+    .select("_id driver stops")
+    .lean();
+
+  for (const run of pastRuns) {
+    const result = await releaseOrdersFromRun(run);
+    releasedOrders += result.orderCount;
+    if (result.hadOpenWork && result.driverId) driversToNotify.push(result.driverId);
+  }
+
+  await notifyDriversDayMissed(driversToNotify);
+
+  if (releasedOrders > 0) {
+    broadcastOrderUpdated({ kind: "delivery_runs_released", count: releasedOrders });
+  }
+
+  return releasedOrders;
+};
+
+/** גיבוי: מסלולים PENDING ישנים מאוד (24ש+) שלא נתפסו ע״י הלוגיקה למעלה */
 const releaseAbandonedRuns = async () => {
   const cutoff = new Date(Date.now() - ABANDONED_RUN_AGE_MS);
   const abandoned = await DeliveryRun.find({
@@ -722,17 +1052,10 @@ const releaseAbandonedRuns = async () => {
     .lean();
 
   for (const run of abandoned) {
-    const orderIds = (run.stops || [])
-      .filter((s) => s.status !== "COMPLETED")
-      .map((s) => s.order)
-      .filter(Boolean);
-    if (orderIds.length) {
-      await Order.updateMany(
-        { _id: { $in: orderIds }, deliveryClaimedBy: run.driver },
-        { $set: { deliveryClaimedBy: null, deliveryClaimedAt: null } }
-      );
+    const result = await releaseOrdersFromRun(run);
+    if (result.hadOpenWork && result.driverId) {
+      await notifyDriversDayMissed([result.driverId]);
     }
-    await DeliveryRun.updateOne({ _id: run._id }, { $set: { status: "COMPLETED" } });
   }
 };
 
@@ -773,7 +1096,7 @@ const releaseStaleDeliveryClaims = async () => {
 };
 
 export const getPendingDeliveriesPool = async () => {
-  // ניקוי הגנה: שחרור claims תקועים לפני בניית הבריכה.
+  await releaseExpiredDeliveryRuns();
   await releaseAbandonedRuns();
   await releaseStaleDeliveryClaims();
 
@@ -803,36 +1126,10 @@ export const claimDeliveriesForToday = async (
     throw new Error("יש להזין שעות עבודה מתוכננות");
   }
 
+  await releaseExpiredDeliveryRuns();
+
   const todayStart = startOfDay();
   const todayEnd = endOfDay();
-
-  // סגירת מסלולים פתוחים של היום + שחרור תפיסות על עצירות שלא הושלמו.
-  const openRunsToday = await DeliveryRun.find({
-    driver: driverId,
-    date: { $gte: todayStart, $lte: todayEnd },
-    status: { $in: ["PENDING", "IN_PROGRESS"] },
-  })
-    .select("_id stops")
-    .lean();
-
-  for (const run of openRunsToday) {
-    const orderIds = (run.stops || [])
-      .filter((s) => s.status !== "COMPLETED")
-      .map((s) => s.order)
-      .filter(Boolean);
-    if (orderIds.length) {
-      await Order.updateMany(
-        { _id: { $in: orderIds }, deliveryClaimedBy: driverId },
-        { $set: { deliveryClaimedBy: null, deliveryClaimedAt: null } }
-      );
-    }
-  }
-  if (openRunsToday.length) {
-    await DeliveryRun.updateMany(
-      { _id: { $in: openRunsToday.map((r) => r._id) } },
-      { $set: { status: "COMPLETED" } }
-    );
-  }
 
   const pool = await getPendingDeliveriesPool();
   if (!pool.length) {
@@ -849,56 +1146,30 @@ export const claimDeliveriesForToday = async (
   }
   if (!startCoords) {
     throw new Error(
-      "יש לקבוע נקודת התחלה — הזן כתובת (עיר/רחוב) או לחץ «השתמש במיקום שלי» לפני תפיסת הובלות"
+      "יש לבחור עיר יציאה לפני תפיסת הובלות"
     );
   }
 
-  // קואורדינטות עזר משמשות רק לחישוב סדר ב-OSRM כשאין geocode להובלה; לא לשמור אותן במסלול —
-  // אחרת Waze/Google מציגים את ת"א במקום הכתובת האמיתית.
-  const enriched = pool.map((s) => {
-    const hasCoords =
-      typeof s.lat === "number" &&
-      typeof s.lng === "number" &&
-      !Number.isNaN(s.lat) &&
-      !Number.isNaN(s.lng);
-    return {
-      ...s,
-      lat: hasCoords ? s.lat : startCoords.lat,
-      lng: hasCoords ? s.lng : startCoords.lng,
-      _coordsAreEstimated: !hasCoords,
-    };
-  });
-
-  // בוחרים הובלות בעזרת greedy חכם עם מטריצת זמנים (OSRM ואם לא — Haversine).
-  // המטריצה כוללת את נקודת המוצא באינדקס 0, ואת ההובלות אחריה.
-  const matrixPoints = [startCoords, ...enriched.map((s) => ({ lat: s.lat, lng: s.lng }))];
-  let matrix = await buildOsrmTimeMatrix(matrixPoints);
-  if (!matrix) {
-    matrix = buildHaversineTimeMatrix(matrixPoints);
-  }
-
-  const greedy = greedyChooseWithinHours(enriched, matrix, hours);
+  // בוחרים הובלות לפי שתי תחנות: יציאה→תחנה1→תחנה2 (מחסן→נגר או נגר→לקוח)
+  const greedy = greedyChooseJobsWithinHours(pool, startCoords, hours);
   let optimizedStops = greedy.stops;
   let totalHours = greedy.totalHours;
   let totalDistanceKm = greedy.totalDistanceKm;
 
   if (!optimizedStops.length) {
-    // חישוב כמה שעות צריך להוסיף כדי שלפחות הובלה אחת תיכנס (הקרובה ביותר).
-    const serviceHours = estimateStopServiceHours();
     let minHoursForOne = Infinity;
-    for (let i = 0; i < enriched.length; i += 1) {
-      const driveHours = matrix.durationHours[0][i + 1];
-      if (Number.isFinite(driveHours)) {
-        const total = driveHours + serviceHours;
-        if (total < minHoursForOne) minHoursForOne = total;
-      }
+    for (const stop of pool) {
+      const total = estimateJobHoursFrom(startCoords, stop);
+      if (Number.isFinite(total) && total < minHoursForOne) minHoursForOne = total;
     }
     const extraNeeded = Number.isFinite(minHoursForOne)
       ? Math.max(Math.ceil((minHoursForOne - hours) * 10) / 10, 0.1)
       : null;
     const message = extraNeeded
       ? `אף הובלה לא נכנסת בשעות שבחרת. הוסף לפחות עוד ${extraNeeded} שעות כדי שתהיה לפחות הובלה אחת מתאימה.`
-      : "אף הובלה לא נכנסת בשעות שבחרת ממיקום ההתחלה.";
+      : Number.isFinite(minHoursForOne)
+        ? `אף הובלה לא נכנסת בשעות שבחרת (נדרשות לפחות ~${Math.round(minHoursForOne * 100) / 100} שעות).`
+        : "לא ניתן לחשב זמן נסיעה — ודאו שכתובות המחסן והנגר/לקוח כוללות שם עיר מוכר.";
     const err = new Error(message);
     err.kind = "NO_FIT";
     err.minHoursNeeded = Number.isFinite(minHoursForOne) ? Math.round(minHoursForOne * 100) / 100 : null;
@@ -947,20 +1218,29 @@ export const claimDeliveriesForToday = async (
     }
   }
   optimizedStops = claimedStops.map((stop) => {
-    const { _coordsAreEstimated, ...base } = stop;
-    if (_coordsAreEstimated) {
-      return {
-        ...base,
-        lat: null,
-        lng: null,
-        wazeUrl: buildWazeUrl(null, null, stop.address),
-      };
-    }
-    return base;
+    const { orderDoc, ...base } = stop;
+    return {
+      order: base.order?._id ?? base.order,
+      deliveryType: base.deliveryType,
+      address: base.address,
+      contactName: base.contactName,
+      contactPhone: base.contactPhone,
+      lat: base.lat,
+      lng: base.lng,
+      wazeUrl: base.wazeUrl,
+      station1: base.station1,
+      station2: base.station2,
+      sourceType: base.sourceType,
+      sourceAddress: base.sourceAddress,
+      destinationType: base.destinationType,
+      destinationAddress: base.destinationAddress,
+    };
   });
   if (!optimizedStops.length) {
     throw new Error("ההובלות שנבחרו נתפסו ע\"י נהג אחר באותו רגע. נסה שוב.");
   }
+
+  await closeDriverOpenRunsToday(driverId, todayStart, todayEnd);
 
   let run;
   try {
@@ -981,7 +1261,9 @@ export const claimDeliveriesForToday = async (
   }
 
   await run.populate(DRIVER_RUN_ORDER_POPULATE);
-  return formatRunForDriverApi(run);
+  await User.findByIdAndUpdate(driverId, { $set: { driverDeliveryNotice: null } });
+  broadcastOrderUpdated({ kind: "delivery_claimed", driverId: String(driverId) });
+  return await formatRunForDriverApi(run);
 };
 
 /**
@@ -1023,7 +1305,7 @@ export const getDriverMonthlyDeliveries = async (driverId, monthDate = new Date(
       if (rawStop.status !== "COMPLETED") continue;
       const completedAt = rawStop.completedAt ? new Date(rawStop.completedAt) : null;
       if (completedAt && (completedAt < periodStart || completedAt >= periodEnd)) continue;
-      const enriched = refreshStopDisplayFromOrder(rawStop);
+      const enriched = await refreshStopDisplayFromOrder(rawStop);
       completedStops.push({
         runId: run._id,
         runDate: run.date,
@@ -1031,6 +1313,8 @@ export const getDriverMonthlyDeliveries = async (driverId, monthDate = new Date(
         completedAt: enriched.completedAt || null,
         orderId: enriched.order?._id || enriched.order || null,
         contactName: enriched.contactName || "",
+        station1: enriched.station1 || null,
+        station2: enriched.station2 || null,
         sourceType: enriched.sourceType || null,
         sourceAddress: enriched.sourceAddress || "",
         destinationType: enriched.destinationType || null,
@@ -1055,14 +1339,26 @@ export const getDriverMonthlyDeliveries = async (driverId, monthDate = new Date(
 };
 
 export const getDriverTodayRun = async (driverId) => {
+  await releaseExpiredDeliveryRuns();
+  await releaseStaleDeliveryClaims();
+
+  const user = await User.findById(driverId).select("driverDeliveryNotice").lean();
+  const releaseNotice = user?.driverDeliveryNotice || null;
+
   const todayStart = startOfDay();
   const todayEnd = endOfDay();
   const run = await DeliveryRun.findOne({
     driver: driverId,
     date: { $gte: todayStart, $lte: todayEnd },
     status: { $in: ["PENDING", "IN_PROGRESS"] },
-  }).populate(DRIVER_RUN_ORDER_POPULATE);
-  return formatRunForDriverApi(run);
+  })
+    .sort({ createdAt: -1 })
+    .populate(DRIVER_RUN_ORDER_POPULATE);
+
+  return {
+    run: await formatRunForDriverApi(run),
+    releaseNotice,
+  };
 };
 
 /**

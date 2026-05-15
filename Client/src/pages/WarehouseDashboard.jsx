@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate, useLocation } from 'react-router-dom';
 
@@ -16,7 +16,6 @@ import LocalShippingOutlinedIcon from '@mui/icons-material/LocalShippingOutlined
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import EditIcon from '@mui/icons-material/Edit';
-import AddCircleIcon from '@mui/icons-material/AddCircle';
 import SearchIcon from '@mui/icons-material/Search';
 import LocationOnIcon from '@mui/icons-material/LocationOn';
 
@@ -41,6 +40,10 @@ import {
 // ⚠️ עדכני את הנתיבים הבאים לפי הפרויקט שלך:
 import { fetchNotifications, markNotificationRead } from '../store/slices/notificationsSlice';
 import { fetchActiveChatPartners } from '../store/slices/chatSlice';
+import { useOrderLiveRefresh } from '../hooks/useOrderLiveRefresh';
+import { useFeedbackSnackbar } from '../hooks/useFeedbackSnackbar';
+import PageHeader from '../components/PageHeader.jsx';
+import { dashboardStatColor } from '../utils/dashboardStatPalette.js';
 
 // ─── קבועים ──────────────────────────────────────────────
 const C = {
@@ -60,9 +63,9 @@ const STATUS_META = {
 };
 
 const PURCHASE_STATUS = {
-  PENDING:          { label: 'ממתין',     bg: '#FFF8E1', color: '#F59E0B', border: '#FCD34D' },
-  SENT_TO_SUPPLIER: { label: 'נשלח לספק', bg: '#E0F2FE', color: '#0284C7', border: '#7DD3FC' },
-  ARRIVED:          { label: 'הגיע ✓',    bg: '#DCFCE7', color: '#16A34A', border: '#86EFAC' },
+  PENDING:          { label: 'ממתין',     bg: '#FFF8F3', color: '#8D6E63', border: '#E8D5C8' },
+  SENT_TO_SUPPLIER: { label: 'נשלח לספק', bg: '#EFEBE9', color: '#5D4037', border: '#D7CCC8' },
+  ARRIVED:          { label: 'הגיע ✓',    bg: '#E8F5E9', color: '#4E342E', border: '#C8E6C9' },
 };
 
 const EMPTY_FORM = {
@@ -126,7 +129,7 @@ const orderForWarehouseCard = (o) => {
 };
 
 // ─── כרטיס הזמנה ─────────────────────────────────────────
-const OrderCard = ({ order, onPick, onReady, newProductIds }) => {
+const OrderCard = ({ order, onPick, onReady, newProductIds, forcePrintButton = false }) => {
   const allPicked = order.requiredMaterials?.every(m => m.isPicked);
   const cardTone =
     order.status === 'WAITING_FOR_SUPPLY' ? 'supply'
@@ -161,7 +164,7 @@ const OrderCard = ({ order, onPick, onReady, newProductIds }) => {
             size="small"
             sx={{ bgcolor: STATUS_META[order.status]?.color, color: 'white', fontWeight: 600 }}
           />
-          {allPicked && (
+          {(allPicked || forcePrintButton) && (
             <Button
               variant="contained" size="small"
               startIcon={<PrintIcon />}
@@ -232,6 +235,11 @@ const OrderCard = ({ order, onPick, onReady, newProductIds }) => {
                   }}>
                     {mat.product?.name || 'חומר'} × {mat.quantity}
                   </Typography>
+                  {order.status === 'WAITING_FOR_PICKING' && (
+                    <Typography sx={{ fontSize: 11, color: '#6D4C41', mt: 0.2 }}>
+                      מיקום מדף: {mat.product?.shelfLocation || 'לא הוגדר'}
+                    </Typography>
+                  )}
                   {isNewProduct && (
                     <Chip
                       icon={<NewReleasesIcon sx={{ fontSize: 12 }} />}
@@ -300,7 +308,7 @@ const SupplierPurchaseCard = ({ supplierName, items, onMarkSent, onMarkArrived, 
               startIcon={isLoading ? <CircularProgress size={14} sx={{ color: 'white' }} /> : <SendIcon sx={{ fontSize: 14 }} />}
               disabled={isLoading}
               onClick={() => onMarkSent(supplierName)}
-              sx={{ bgcolor: '#0284C7', fontSize: 12, fontWeight: 600, borderRadius: 2 }}
+              sx={{ bgcolor: C.primary, fontSize: 12, fontWeight: 600, borderRadius: 2, '&:hover': { bgcolor: C.medium } }}
             >
               הרשימה נשלחה לטיפול הספק
             </Button>
@@ -311,16 +319,16 @@ const SupplierPurchaseCard = ({ supplierName, items, onMarkSent, onMarkArrived, 
               startIcon={isLoading ? <CircularProgress size={14} sx={{ color: 'white' }} /> : <LocalShippingOutlinedIcon sx={{ fontSize: 14 }} />}
               disabled={isLoading}
               onClick={() => onMarkArrived(supplierName)}
-              sx={{ bgcolor: '#16A34A', fontSize: 12, fontWeight: 600, borderRadius: 2 }}
+              sx={{ bgcolor: '#5D4037', fontSize: 12, fontWeight: 600, borderRadius: 2, '&:hover': { bgcolor: '#3E2723' } }}
             >
               סמן כהגיע
             </Button>
           )}
           {supplierStatus === 'ARRIVED' && (
             <Chip
-              icon={<CheckCircleIcon sx={{ fontSize: 14, color: '#16A34A' }} />}
+              icon={<CheckCircleIcon sx={{ fontSize: 14, color: '#4E342E' }} />}
               label="הושלם" size="small"
-              sx={{ bgcolor: '#DCFCE7', color: '#16A34A', fontWeight: 600 }}
+              sx={{ bgcolor: '#E8F5E9', color: '#4E342E', fontWeight: 600, border: '1px solid #C8E6C9' }}
             />
           )}
           <IconButton size="small" onClick={() => setExpanded(p => !p)}>
@@ -332,11 +340,11 @@ const SupplierPurchaseCard = ({ supplierName, items, onMarkSent, onMarkArrived, 
       <Collapse in={expanded}>
         <Table size="small">
           <TableHead>
-            <TableRow sx={{ bgcolor: '#FAFAFA' }}>
+            <TableRow sx={{ bgcolor: '#FBF8F5' }}>
               <TableCell sx={{ fontWeight: 600, fontSize: 12, color: '#5D4037' }}>מוצר</TableCell>
               <TableCell align="center" sx={{ fontWeight: 600, fontSize: 12, color: '#5D4037' }}>יחידה</TableCell>
-              <TableCell align="center" sx={{ fontWeight: 600, fontSize: 12, color: '#E65100' }}>להזמנות</TableCell>
-              <TableCell align="center" sx={{ fontWeight: 600, fontSize: 12, color: '#0284C7' }}>למלאי</TableCell>
+              <TableCell align="center" sx={{ fontWeight: 600, fontSize: 12, color: '#A0522D' }}>להזמנות</TableCell>
+              <TableCell align="center" sx={{ fontWeight: 600, fontSize: 12, color: '#6D4C41' }}>למלאי</TableCell>
               <TableCell align="center" sx={{ fontWeight: 600, fontSize: 12, color: '#3E2723' }}>סה"כ</TableCell>
             </TableRow>
           </TableHead>
@@ -351,11 +359,11 @@ const SupplierPurchaseCard = ({ supplierName, items, onMarkSent, onMarkArrived, 
                 </TableCell>
                 <TableCell align="center">
                   <Chip label={item.forOrders} size="small"
-                    sx={{ bgcolor: '#FFF3E0', color: '#E65100', fontWeight: 700, fontSize: 11, minWidth: 36 }} />
+                    sx={{ bgcolor: '#FFF8F0', color: '#A0522D', fontWeight: 700, fontSize: 11, minWidth: 36, border: '1px solid #E8C9B0' }} />
                 </TableCell>
                 <TableCell align="center">
                   <Chip label={item.forStock} size="small"
-                    sx={{ bgcolor: '#E0F2FE', color: '#0284C7', fontWeight: 700, fontSize: 11, minWidth: 36 }} />
+                    sx={{ bgcolor: '#EFEBE9', color: '#5D4037', fontWeight: 700, fontSize: 11, minWidth: 36, border: '1px solid #D7CCC8' }} />
                 </TableCell>
                 <TableCell align="center">
                   <Chip label={item.totalQuantityNeeded} size="small"
@@ -371,7 +379,7 @@ const SupplierPurchaseCard = ({ supplierName, items, onMarkSent, onMarkArrived, 
 };
 
 // ─── דיאלוג הוספת מוצר בסיס ──────────────────────────────
-const AddBaseProductDialog = ({ open, onClose }) => {
+const AddBaseProductDialog = ({ open, onClose, showError, showSuccess }) => {
   const dispatch = useDispatch();
   const { createLoading, createError, createSuccess } = useSelector(s => s.warehouse);
   const [form, setForm] = useState(EMPTY_FORM);
@@ -381,8 +389,13 @@ const AddBaseProductDialog = ({ open, onClose }) => {
       setForm(EMPTY_FORM);
       onClose();
       dispatch(clearCreateStatus());
+      if (showSuccess) showSuccess('מוצר הבסיס נוסף למחסן בהצלחה');
     }
-  }, [createSuccess]);
+  }, [createSuccess, dispatch, onClose, showSuccess]);
+
+  useEffect(() => {
+    if (createError && showError) showError(createError);
+  }, [createError, showError]);
 
   const handleChange = (field) => (e) => {
     const val = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
@@ -390,7 +403,14 @@ const AddBaseProductDialog = ({ open, onClose }) => {
   };
 
   const handleSubmit = () => {
-    if (!form.name || !form.unit) return;
+    if (!form.name?.trim()) {
+      showError?.('יש להזין שם מוצר');
+      return;
+    }
+    if (!form.unit?.trim()) {
+      showError?.('יש להזין יחידת מידה');
+      return;
+    }
     dispatch(createBaseProductAction({
       ...form,
       quantity:        Number(form.quantity),
@@ -441,6 +461,7 @@ const AddBaseProductDialog = ({ open, onClose }) => {
                   <Select value={form.materialType || ''} onChange={handleChange('materialType')} label="סוג חומר">
                     <MenuItem value="wood">עץ</MenuItem>
                     <MenuItem value="fabric">בד</MenuItem>
+                    <MenuItem value="handle">ידית</MenuItem>
                   </Select>
                 </FormControl>
               </Grid>
@@ -467,7 +488,7 @@ const AddBaseProductDialog = ({ open, onClose }) => {
 };
 
 // ─── דיאלוג עריכת מוצר בסיס ──────────────────────────────
-const EditBaseProductDialog = ({ open, product, onClose, onSaved }) => {
+const EditBaseProductDialog = ({ open, product, onClose, onSaved, showError, showSuccess }) => {
   const dispatch = useDispatch();
   const [form, setForm]     = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
@@ -499,9 +520,18 @@ const EditBaseProductDialog = ({ open, product, onClose, onSaved }) => {
   };
 
   const handleSubmit = async () => {
-    if (!form.name || !form.unit) return;
+    if (!form.name?.trim()) {
+      showError?.('יש להזין שם מוצר');
+      return;
+    }
+    if (!form.unit?.trim()) {
+      showError?.('יש להזין יחידת מידה');
+      return;
+    }
     if (product?.isNew && (!String(form.supplier || '').trim() || Number(form.quantity) < 0)) {
-      setError('למוצר חדש חובה להזין ספק וכמות התחלתית תקינה לפני אישור');
+      const msg = 'למוצר חדש חובה להזין ספק וכמות התחלתית תקינה לפני אישור';
+      setError(msg);
+      showError?.(msg);
       return;
     }
     setSaving(true);
@@ -519,10 +549,13 @@ const EditBaseProductDialog = ({ open, product, onClose, onSaved }) => {
           confirmNewProduct: !!product?.isNew,
         },
       })).unwrap();
+      showSuccess?.('המוצר עודכן בהצלחה');
       onSaved?.();
       onClose();
     } catch (err) {
-      setError(err || 'שגיאה בעדכון המוצר');
+      const msg = err || 'שגיאה בעדכון המוצר';
+      setError(msg);
+      showError?.(msg);
     } finally {
       setSaving(false);
     }
@@ -584,6 +617,7 @@ const EditBaseProductDialog = ({ open, product, onClose, onSaved }) => {
                   <Select value={form.materialType || ''} onChange={handleChange('materialType')} label="סוג חומר">
                     <MenuItem value="wood">עץ</MenuItem>
                     <MenuItem value="fabric">בד</MenuItem>
+                    <MenuItem value="handle">ידית</MenuItem>
                   </Select>
                 </FormControl>
               </Grid>
@@ -616,12 +650,12 @@ const WarehouseDashboard = () => {
   const dispatch   = useDispatch();
   const navigate   = useNavigate();
   const location   = useLocation();
+  const { showSuccess, showError, FeedbackSnackbar } = useFeedbackSnackbar();
 
   const [tab, setTab]                         = useState(0);
   const [search, setSearch]                   = useState('');
   const [addDialogOpen, setAddDialogOpen]     = useState(false);
   const [editProduct, setEditProduct]         = useState(null);
-  const [snackMsg, setSnackMsg]               = useState('');
   const [loadingSupplier, setLoadingSupplier] = useState(null);
 
   useEffect(() => {
@@ -649,6 +683,14 @@ const WarehouseDashboard = () => {
     dispatch(fetchOrdersWithNewProducts());
   }, [dispatch]);
 
+  const refreshWarehouseData = useCallback(() => {
+    dispatch(fetchAllOrders());
+    dispatch(fetchPurchaseList());
+    dispatch(fetchOrdersWithNewProducts());
+  }, [dispatch]);
+
+  useOrderLiveRefresh(refreshWarehouseData);
+
   const handlePick = async (orderId, materialId) => {
     try {
       const updatedOrder = await dispatch(
@@ -658,11 +700,11 @@ const WarehouseDashboard = () => {
       const allPicked = (updatedOrder?.requiredMaterials || []).every((m) => !!m.isPicked);
       if (allPicked) {
         printShippingLabel(updatedOrder);
-        setSnackMsg('כל החומרים נלקטו — נפתחה תווית להדפסה');
+        showSuccess("כל החומרים נלקטו — נפתחה תווית להדפסה");
       }
     } catch (e) {
-      const msg = typeof e === 'string' ? e : e?.message || 'שגיאה בסימון ליקוט';
-      setSnackMsg(`${msg} ❌`);
+      const msg = typeof e === "string" ? e : e?.message || "שגיאה בסימון ליקוט";
+      showError(msg);
     }
   };
 
@@ -722,7 +764,7 @@ const WarehouseDashboard = () => {
 
     const printWindow = window.open('', '_blank', 'width=720,height=900');
     if (!printWindow) {
-      setSnackMsg('הדפדפן חסם חלון הדפסה. אפשרי חלונות קופצים ונסי שוב.');
+      showError("הדפדפן חסם חלון הדפסה. אפשרי חלונות קופצים ונסי שוב.");
       return;
     }
     printWindow.document.open();
@@ -745,9 +787,10 @@ const WarehouseDashboard = () => {
     setLoadingSupplier(supplierName);
     try {
       await dispatch(markSupplierSentAction(supplierName)).unwrap();
-      setSnackMsg(`ההזמנה נשלחה לספק "${supplierName}" ✅`);
-    } catch (e) {
-      setSnackMsg('שגיאה בשליחה לספק ❌');
+      await dispatch(fetchPurchaseList({ silent: true })).unwrap();
+      showSuccess(`הרשימה נשלחה לספק "${supplierName}"`);
+    } catch {
+      showError("שגיאה בשליחה לספק");
     } finally {
       setLoadingSupplier(null);
     }
@@ -757,13 +800,13 @@ const WarehouseDashboard = () => {
     setLoadingSupplier(supplierName);
     try {
       await dispatch(markSupplierArrivedAction(supplierName)).unwrap();
-      setSnackMsg(`סחורה מ"${supplierName}" עודכנה במלאי ✅`);
+      await dispatch(fetchPurchaseList({ silent: true })).unwrap();
+      showSuccess(`סחורה מ"${supplierName}" עודכנה במלאי`);
       dispatch(fetchAllBaseProducts());
-      dispatch(fetchPurchaseList());
       dispatch(fetchAllOrders());
       dispatch(fetchOrdersWithNewProducts());
-    } catch (e) {
-      setSnackMsg('שגיאה בעדכון הגעה ❌');
+    } catch {
+      showError("שגיאה בעדכון הגעה");
     } finally {
       setLoadingSupplier(null);
     }
@@ -796,7 +839,14 @@ const WarehouseDashboard = () => {
       return new Date(b.orderDate || 0) - new Date(a.orderDate || 0);
     });
 
-  const readyOrders   = (orders || []).filter(o => o.status === 'READY_FOR_SHIPPING');
+  /** אחריות מחסן נגמרת כשהחבילה יוצאת לנגר — לא מציגים שלב נגר→לקוח או הזמנות שכבר נמסרו לנגר */
+  const readyOrders = (orders || []).filter(
+    (o) =>
+      o.status === 'READY_FOR_SHIPPING' &&
+      !o.carpenterCompletedAt &&
+      !o.driverMarkedDeliveredToCarpenterAt &&
+      !o.receivedByCarpenter
+  );
   const unreadNotif   = (notifications || []).filter(n => !n.isRead && n.type !== 'CHAT').length;
 
   const filteredStock = (baseProducts || []).filter(p =>
@@ -806,65 +856,52 @@ const WarehouseDashboard = () => {
 
   const stats = [
     {
-      title: 'ממתינות לליקוט', value: pickingOrders.length,
+      title: 'הזמנות הממתינות לליקוט', value: pickingOrders.length,
       sub: pendingWarehouseOrders.length > 0
         ? `${pendingWarehouseOrders.length} הזמנות ישנות ללא סיווג — בטאב "כל ההזמנות"`
         : 'מוכנות לאיסוף (הכל במלאי)',
-      color: '#A0522D',
       icon: <HourglassEmptyIcon sx={{ fontSize: 24 }} />,
       onClick: () => setTab(0),
     },
     {
-      title: 'ממתינות לאספקה', value: supplyOrders.length,
-      sub: 'חסרים במלאי', color: '#8B0000',
+      title: 'הזמנות הממתינות לאספקה', value: supplyOrders.length,
+      sub: 'חסרים במלאי',
       icon: <WarningAmberIcon sx={{ fontSize: 24 }} />,
       onClick: () => setTab(1),
     },
     {
-      title: 'מוכנות למשלוח', value: readyOrders.length,
-      sub: 'ארוזות ומחכות', color: '#2E7D32',
+      title: 'ממתינות למוביל', value: readyOrders.length,
+      sub: 'מוכנות לאיסוף — עדיין לא אצל הנגר',
       icon: <LocalShippingIcon sx={{ fontSize: 24 }} />,
-      onClick: () => setTab(0),
+      onClick: () => setTab(4),
     },
     {
       title: "צ'אט והתראות",
       value: unreadNotif + totalUnreadChatCount,
       sub: totalUnreadChatCount > 0 ? `${totalUnreadChatCount} הודעות צ'אט` : 'אין חדש',
-      color: '#5D4037',
       icon: <ChatIcon sx={{ fontSize: 24 }} />,
-      onClick: () => setTab(5),
+      onClick: () => setTab(6),
     },
   ];
 
   if (loading) return (
     <Box sx={{ display: 'flex', justifyContent: 'center', mt: 10 }}>
-      <CircularProgress sx={{ color: C.primary }} />
+      <CircularProgress color="secondary" />
     </Box>
   );
 
   return (
-    <Box sx={{ p: 3, width: '100%', maxWidth: '100%', mx: 'auto', boxSizing: 'border-box' }}>
-      <Box sx={{ mb: 3, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-        <Box>
-          <Typography sx={{ fontSize: 22, fontWeight: 700, color: C.dark }}>
-            שלום, {user?.fullName || user?.username || 'מחסנאי'} 👋
-          </Typography>
-          <Typography sx={{ fontSize: 13, color: '#A1887F' }}>דשבורד מחסן</Typography>
-        </Box>
-        <Button
-          variant="contained" startIcon={<AddCircleIcon />}
-          onClick={() => setAddDialogOpen(true)}
-          sx={{ bgcolor: C.primary, borderRadius: 2, fontWeight: 600 }}
-        >
-          הוסף מוצר בסיס
-        </Button>
-      </Box>
+    <Box sx={{ width: '100%', maxWidth: '100%', mx: 'auto', boxSizing: 'border-box', minWidth: 0 }}>
+      <PageHeader
+        title="לוח מחוונים"
+        description={`שלום, ${user?.fullName || user?.username || 'מחסנאי'} — תורים, ליקוט, אספקה, הובלות ומלאי.\n${new Date().toLocaleDateString('he-IL', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}`}
+      />
 
       {(ordersWithNewProducts || []).length > 0 && (
         <Alert
           severity="warning" icon={<NewReleasesIcon />}
           sx={{ mb: 2, fontWeight: 600, cursor: 'pointer' }}
-          onClick={() => setTab(4)}
+          onClick={() => setTab(5)}
         >
           יש {ordersWithNewProducts.length} הזמנות עם מוצרי בסיס חדשים שדורשים אספקה ראשונית — לחץ לצפייה במלאי
         </Alert>
@@ -873,7 +910,7 @@ const WarehouseDashboard = () => {
       <Grid container spacing={2} sx={{ mb: 3, justifyContent: 'center' }}>
         {stats.map((s, i) => (
           <Grid size={{ xs: 6, md: 3 }} key={i}>
-            <StatCard {...s} />
+            <StatCard {...s} color={dashboardStatColor(i)} />
           </Grid>
         ))}
       </Grid>
@@ -888,11 +925,20 @@ const WarehouseDashboard = () => {
             '& .MuiTabs-indicator': { bgcolor: C.primary },
           }}
         >
-          <Tab label={`📦 ליקוט (${pickingOrders.length})`} />
-          <Tab label={`⚠️ ממתין לאספקה (${supplyOrders.length})`} />
+          <Tab label={`📦 הזמנות הממתינות לליקוט (${pickingOrders.length})`} />
+          <Tab label={`⚠️ הזמנות הממתינות לאספקה (${supplyOrders.length})`} />
           <Tab label={`📋 כל ההזמנות (${allWarehouseQueueOrders.length})`} />
           <Tab label={`🛒 רכש מרוכז${supplierNames.length > 0 ? ` (${supplierNames.length})` : ''}`} />
-          <Tab label={`📊 מלאי${newProductIds.length > 0 ? ` (${newProductIds.length} חדשים באספקה)` : ''}`} />
+          <Tab label={`🚚 ממתינות למוביל (${readyOrders.length})`} />
+          <Tab
+            label={`📊 מלאי${
+              newProductIds.length > 0
+                ? ` (${newProductIds.length} ${
+                    newProductIds.length === 1 ? "חדש טעון אספקה" : "חדשים טעוני אספקה"
+                  })`
+                : ""
+            }`}
+          />
           <Tab label={`💬 צ'אט${totalUnreadChatCount > 0 ? ` (${totalUnreadChatCount})` : ''}`} />
         </Tabs>
 
@@ -901,7 +947,7 @@ const WarehouseDashboard = () => {
           {tab === 0 && (
             <Box>
               {pickingOrders.length === 0
-                ? <Alert severity="success">אין הזמנות ממתינות לליקוט 🎉</Alert>
+                ? <Alert severity="success">אין הזמנות הממתינות לליקוט 🎉</Alert>
                 : pickingOrders.map(o => (
                     <OrderCard key={o._id} order={orderForWarehouseCard(o)} onPick={handlePick} onReady={handleReady} newProductIds={newProductIds} />
                   ))
@@ -923,7 +969,7 @@ const WarehouseDashboard = () => {
           {tab === 2 && (
             <Box>
               <Alert severity="info" sx={{ mb: 2 }}>
-                רקע ירוק — כל החומרים זמינים לליקוט. רקע אדום — חסר במלאי (ממתין לאספקה).
+                רקע ירוק — כל החומרים זמינים לליקוט. רקע אדום — חסר במלאי (הזמנות הממתינות לאספקה).
                 {pendingWarehouseOrders.length > 0 && (
                   <> רקע צהוב — סטטוס ישן &quot;ממתין למחסן&quot; (לפני סיווג אוטומטי).</>
                 )}
@@ -941,17 +987,17 @@ const WarehouseDashboard = () => {
             <Box>
               {supplierNames.length > 0 && (
                 <Box sx={{ display: 'flex', gap: 2, mb: 2.5, flexWrap: 'wrap' }}>
-                  <Box sx={{ p: 1.5, borderRadius: 2, bgcolor: '#FFF8E1', border: '1px solid #FCD34D', minWidth: 120 }}>
+                  <Box sx={{ p: 1.5, borderRadius: 2, bgcolor: '#FFF8F3', border: `1px solid ${C.border}`, minWidth: 120 }}>
                     <Typography sx={{ fontSize: 11, color: '#A1887F' }}>ספקים פעילים</Typography>
-                    <Typography sx={{ fontSize: 20, fontWeight: 700, color: '#F59E0B' }}>{supplierNames.length}</Typography>
+                    <Typography sx={{ fontSize: 20, fontWeight: 700, color: '#6D4C41' }}>{supplierNames.length}</Typography>
                   </Box>
                   <Box sx={{ p: 1.5, borderRadius: 2, bgcolor: '#FBF0E9', border: `1px solid ${C.border}`, minWidth: 120 }}>
                     <Typography sx={{ fontSize: 11, color: '#A1887F' }}>סה"כ פריטים</Typography>
                     <Typography sx={{ fontSize: 20, fontWeight: 700, color: C.primary }}>{(purchaseList || []).length}</Typography>
                   </Box>
-                  <Box sx={{ p: 1.5, borderRadius: 2, bgcolor: '#E0F2FE', border: '1px solid #7DD3FC', minWidth: 120 }}>
+                  <Box sx={{ p: 1.5, borderRadius: 2, bgcolor: '#EFEBE9', border: '1px solid #D7CCC8', minWidth: 120 }}>
                     <Typography sx={{ fontSize: 11, color: '#A1887F' }}>נשלח לטיפול הספק</Typography>
-                    <Typography sx={{ fontSize: 20, fontWeight: 700, color: '#0284C7' }}>
+                    <Typography sx={{ fontSize: 20, fontWeight: 700, color: '#5D4037' }}>
                       {supplierNames.filter(name => purchaseBySupplier[name].every(i => i.status === 'SENT_TO_SUPPLIER' || i.status === 'ARRIVED')).length}
                     </Typography>
                   </Box>
@@ -975,7 +1021,25 @@ const WarehouseDashboard = () => {
 
           {tab === 4 && (
             <Box>
-              <Box sx={{ mb: 2, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              {readyOrders.length === 0
+                ? <Alert severity="success">אין כרגע הזמנות שממתינות למוביל 🎉</Alert>
+                : readyOrders.map(o => (
+                    <OrderCard
+                      key={o._id}
+                      order={orderForWarehouseCard(o)}
+                      onPick={handlePick}
+                      onReady={handleReady}
+                      newProductIds={newProductIds}
+                      forcePrintButton
+                    />
+                  ))
+              }
+            </Box>
+          )}
+
+          {tab === 5 && (
+            <Box>
+              <Box sx={{ mb: 2, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 1 }}>
                 <TextField
                   size="small"
                   placeholder="חפש מוצר או מיקום מדף..."
@@ -990,13 +1054,18 @@ const WarehouseDashboard = () => {
                   }}
                   sx={{ width: 300 }}
                 />
-                <Typography sx={{ fontSize: 12, color: '#A1887F' }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+                  <Button variant="outlined" size="small" color="primary" onClick={() => setAddDialogOpen(true)}>
+                    הוסף מוצר בסיס
+                  </Button>
+                  <Typography sx={{ fontSize: 12, color: '#A1887F' }}>
                   מציג {filteredStock.length} מוצרים
                   {newProductIds.length > 0 && (
                     <Chip label={`${newProductIds.length} חדשים`} size="small"
                       sx={{ ml: 1, bgcolor: '#FFE0B2', color: '#E65100', fontSize: 10 }} />
                   )}
                 </Typography>
+                </Box>
               </Box>
 
               <TableContainer
@@ -1096,7 +1165,7 @@ const WarehouseDashboard = () => {
             </Box>
           )}
 
-          {tab === 5 && (
+          {tab === 6 && (
             <Box>
               {totalUnreadChatCount > 0 && (
                 <Box
@@ -1150,26 +1219,26 @@ const WarehouseDashboard = () => {
         </Box>
       </Paper>
 
-      <AddBaseProductDialog open={addDialogOpen} onClose={() => setAddDialogOpen(false)} />
+      <AddBaseProductDialog
+        open={addDialogOpen}
+        onClose={() => setAddDialogOpen(false)}
+        showError={showError}
+        showSuccess={showSuccess}
+      />
 
-      {/* ✅ תוספת: רענון purchaseList ו-baseProducts אחרי עריכה ידנית */}
       <EditBaseProductDialog
         open={!!editProduct}
         product={editProduct}
         onClose={() => setEditProduct(null)}
+        showError={showError}
+        showSuccess={showSuccess}
         onSaved={() => {
-          setSnackMsg('המוצר עודכן בהצלחה ✅');
           dispatch(fetchPurchaseList());
           dispatch(fetchAllBaseProducts());
         }}
       />
 
-      <Snackbar
-        open={!!snackMsg}
-        autoHideDuration={3000}
-        onClose={() => setSnackMsg('')}
-        message={snackMsg}
-      />
+      <FeedbackSnackbar />
 
       <style>{`
         @keyframes pulse {

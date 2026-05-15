@@ -15,6 +15,8 @@ import { fetchEmployees } from '../store/slices/employeesSlice';
 import { fetchNotifications, markNotificationRead } from '../store/slices/notificationsSlice';
 import { fetchCatalogByStatus } from '../store/slices/catalogSlice';
 import { fetchActiveChatPartners } from '../store/slices/chatSlice';
+import PageHeader from '../components/PageHeader.jsx';
+import { dashboardStatColor } from '../utils/dashboardStatPalette.js';
 
 const STATUS_LABEL = {
   QUOTATION_PENDING:   { label: 'בהצעת מחיר',   color: '#FFD700' },
@@ -27,7 +29,6 @@ const STATUS_LABEL = {
   DONE:                { label: 'הושלם',         color: '#9E9E9E' },
 };
 
-const STAT_COLORS = ['#D2691E', '#A0522D', '#8B4513', '#5D4037'];
 const STAT_ICONS  = [
   <ShoppingCartIcon  sx={{ fontSize: 26 }} />,
   <PeopleIcon        sx={{ fontSize: 26 }} />,
@@ -38,7 +39,7 @@ const STAT_ICONS  = [
 const C = { primary: '#D2691E', border: '#E8C9B0', dark: '#3E2723' };
 
 /** לשוניות תחת הכרטיס הגדול (כמו נגר / מחסן) */
-const MANAGER_MAIN_TAB_KEYS = ['ORDERS', 'ALERTS', 'CARPENTERS'];
+const MANAGER_MAIN_TAB_KEYS = ['ORDERS', 'COMPLETED', 'ALERTS', 'CARPENTERS'];
 /** סנכרון ריבוע סטטיסטיקה → לשונית (אינדקס 2 = ממתינים לאישור → ניווט לקטלוג בלבד) */
 const STAT_INDEX_TO_TAB = ['ORDERS', 'CARPENTERS', null, 'ALERTS'];
 
@@ -83,7 +84,23 @@ const Dashboard = () => {
     dispatch(fetchActiveChatPartners());
   }, [dispatch]);
 
-  const activeOrders = orders.filter(o => o.status !== 'DONE');
+  useEffect(() => {
+    if (mainTab === 'CARPENTERS') {
+      dispatch(fetchEmployees());
+    }
+  }, [dispatch, mainTab]);
+
+  // כל ההזמנות שקיימות במערכת ועדיין לא נמסרו ללקוח (DONE = «סופק ללקוח»).
+  // כולל QUOTATION_PENDING, ORDERED, WAITING_FOR_WAREHOUSE/PICKING/SUPPLY,
+  // READY_FOR_SHIPPING ו-IN_PROGRESS. ממוין מהחדשה לישנה כדי שהדחופות יופיעו למעלה.
+  const activeOrders = orders
+    .filter(o => o.status !== 'DONE')
+    .slice()
+    .sort((a, b) => new Date(b.orderDate || 0) - new Date(a.orderDate || 0));
+  const completedOrders = orders
+    .filter(o => o.status === 'DONE')
+    .slice()
+    .sort((a, b) => new Date(b.orderDate || 0) - new Date(a.orderDate || 0));
   const newOrders = orders.filter(o => o.status === 'ORDERED');
   const carpenters = employees.filter(e => e.role === 'CARPENTER');
   const pendingApproval = products.filter(p => p.status === 'WAITING_ADMIN_APPROVAL');
@@ -104,7 +121,7 @@ const Dashboard = () => {
     {
       title: 'ממתינים לאישור',
       value: pendingApproval.length,
-      sub: 'מוצרים מאפיון',
+      sub: 'חזרו מאיפיון וממתינים לאישור',
       onClick: () => navigate('/catalog'),
     },
     {
@@ -118,25 +135,24 @@ const Dashboard = () => {
   if (ordersLoading || empLoading || chatState?.chatLoading) {
     return (
       <Box sx={{ display: 'flex', justifyContent: 'center', mt: 8 }}>
-        <CircularProgress sx={{ color: '#D2691E' }} />
+        <CircularProgress color="secondary" />
       </Box>
     );
   }
 
   return (
-    <Box sx={{ width: '100%', maxWidth: '100%', mx: 'auto', boxSizing: 'border-box' }}>
-      <Box sx={{ mb: 3 }}>
-        <Typography sx={{ fontSize: 21, fontWeight: 700, color: '#3E2723' }}>
-          שלום, {user?.fullName || user?.username || 'מנהל'} 👋
-        </Typography>
-      </Box>
+    <Box sx={{ width: '100%', maxWidth: '100%', mx: 'auto', boxSizing: 'border-box', minWidth: 0 }}>
+      <PageHeader
+        title="לוח מחוונים"
+        description={`שלום, ${user?.fullName || user?.username || 'מנהל'} — הזמנות, צוות, קטלוג והתראות במקום אחד.\n${new Date().toLocaleDateString('he-IL', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}`}
+      />
 
       {/* שורה 1: כרטיסי סטטיסטיקה */}
       <Grid container spacing={2} sx={{ mb: 2.5 }}>
         {stats.map((stat, i) => (
           <Grid size={{ xs: 6, md: 3 }} key={i}>
             <Box onClick={stat.onClick} sx={{
-              bgcolor: STAT_COLORS[i], borderRadius: 3, p: 2.5, height: 140, cursor: 'pointer',
+              bgcolor: dashboardStatColor(i), borderRadius: 3, p: 2.5, height: 140, cursor: 'pointer',
               display: 'flex', flexDirection: 'column', justifyContent: 'space-between',
               transition: '0.15s ease', '&:hover': { transform: 'translateY(-2px)', opacity: 0.92 },
               outline: STAT_INDEX_TO_TAB[i] && mainTab === STAT_INDEX_TO_TAB[i]
@@ -180,6 +196,7 @@ const Dashboard = () => {
           }}
         >
           <Tab label={`הזמנות (${activeOrders.length})`} value="ORDERS" />
+          <Tab label={`סופקו ללקוח (${completedOrders.length})`} value="COMPLETED" />
           <Tab
             label={
               unreadNotifCount + totalUnreadChatCount > 0
@@ -205,7 +222,7 @@ const Dashboard = () => {
                 {activeOrders.length === 0 ? (
                   <Alert severity="info">אין הזמנות פעילות</Alert>
                 ) : (
-                  activeOrders.slice(0, 10).map(order => (
+                  activeOrders.map(order => (
                     <Box
                       key={order.id || order._id}
                       sx={{
@@ -302,6 +319,62 @@ const Dashboard = () => {
                         </Button>
                       </Box>
                     ))
+                )}
+              </Box>
+            </Box>
+          )}
+
+          {mainTab === 'COMPLETED' && (
+            <Box>
+              <SectionHeader
+                emoji="✅"
+                title="הזמנות שסופקו ללקוח"
+                btnLabel="הכל"
+                onClick={() =>
+                  navigate('/manager/orders', {
+                    state: {
+                      initialOrdersTab: 'COMPLETED',
+                      emptyText: 'אין הזמנות שסופקו ללקוח',
+                    },
+                  })
+                }
+                titleColor="#2E7D32"
+              />
+              <Box sx={{ maxHeight: 420, overflowY: 'auto' }}>
+                {completedOrders.length === 0 ? (
+                  <Alert severity="info">אין הזמנות שסופקו ללקוח</Alert>
+                ) : (
+                  completedOrders.map(order => (
+                    <Box
+                      key={order.id || order._id}
+                      sx={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        py: 1.2,
+                        borderBottom: '1px solid #E8C9B0',
+                      }}
+                    >
+                      <Box>
+                        <Typography sx={{ fontSize: 13, fontWeight: 500 }}>{order.customer?.name || 'לקוח'}</Typography>
+                        <Typography sx={{ fontSize: 11, color: '#A1887F' }}>
+                          {order.orderDate ? new Date(order.orderDate).toLocaleDateString('he-IL') : '—'}
+                        </Typography>
+                      </Box>
+                      <Box
+                        sx={{
+                          fontSize: 11,
+                          px: 1,
+                          py: 0.3,
+                          borderRadius: 10,
+                          bgcolor: '#E8F5E9',
+                          color: '#2E7D32',
+                          fontWeight: 600,
+                        }}
+                      >
+                        סופק ללקוח
+                      </Box>
+                    </Box>
+                  ))
                 )}
               </Box>
             </Box>

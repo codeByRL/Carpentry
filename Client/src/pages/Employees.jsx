@@ -14,9 +14,13 @@ import { Box, Typography, Button, Paper, Table, TableBody, TableCell,
 import {
   fetchEmployees, fetchWarehouses,
   fetchEmployeeActiveOrders,
+  fetchDriverMonthlyDeliveries,
   createEmployee, updateEmployee, deleteEmployee,
   clearSubmitError
 } from '../store/slices/employeesSlice';
+import { useFeedbackSnackbar } from '../hooks/useFeedbackSnackbar';
+import PageHeader from '../components/PageHeader.jsx';
+import { firstFormError } from '../utils/formFeedback';
 
 // --- (הוצא מחוץ לקומפוננטת Employees) ---
 const FormField = ({ label, field, formData, handleChange, errors, type = 'text', multiline, rows, children, helperTextOverride, ...props }) => {
@@ -86,9 +90,11 @@ const TabPanel = ({ children, value, index }) => (
 
 const Employees = () => {
   const dispatch = useDispatch();
+  const { showSuccess, showError, FeedbackSnackbar } = useFeedbackSnackbar();
   const {
     employees, warehouses, loading, submitLoading, submitError,
-    employeeActiveOrders, activeOrdersLoadingByEmployee
+    employeeActiveOrders, activeOrdersLoadingByEmployee,
+    driverMonthlyByEmployee, driverMonthlyLoadingByEmployee,
   } = useSelector(state => state.employees);
 
   const [open, setOpen] = useState(false);
@@ -103,6 +109,8 @@ const Employees = () => {
   const [viewEmployee, setViewEmployee] = useState(null);
   const [ordersSpecOpen, setOrdersSpecOpen] = useState(false);
   const [ordersSpecEmployee, setOrdersSpecEmployee] = useState(null);
+  const [driverMonthOpen, setDriverMonthOpen] = useState(false);
+  const [driverMonthEmployee, setDriverMonthEmployee] = useState(null);
 
   // ── סינון ──
   const [filterName, setFilterName]               = useState('');
@@ -114,6 +122,12 @@ const Employees = () => {
   useEffect(() => {
     dispatch(fetchEmployees());
     dispatch(fetchWarehouses());
+  }, [dispatch]);
+
+  useEffect(() => {
+    const refreshEmployees = () => dispatch(fetchEmployees());
+    window.addEventListener('focus', refreshEmployees);
+    return () => window.removeEventListener('focus', refreshEmployees);
   }, [dispatch]);
 
   const handleOpenAdd = () => {
@@ -158,7 +172,7 @@ const Employees = () => {
     const validationErrors = validate(formData, isEdit);
     if (Object.keys(validationErrors).length > 0) {
       setErrors(validationErrors);
-      // שיפור קטן: מציג את הטאב הנכון אם יש שגיאה
+      showError(firstFormError(validationErrors));
       if (validationErrors.fullName || validationErrors.email || validationErrors.password || validationErrors.idNumber) setTab(0);
       else if (validationErrors.phone) setTab(1);
       else if (validationErrors.salary) setTab(2);
@@ -172,12 +186,18 @@ const Employees = () => {
     });
     if (contractFile) data.append('contractFile', contractFile);
     const result = await dispatch(isEdit ? updateEmployee({ id: editId, formData: data }) : createEmployee(data));
-    if (!result.error) handleClose();
+    if (!result.error) {
+      showSuccess(isEdit ? 'פרטי העובד עודכנו בהצלחה' : 'העובד נוסף בהצלחה');
+      handleClose();
+    } else {
+      showError(firstFormError(result.payload || submitError, 'שגיאה בשמירת פרטי העובד'));
+    }
   };
 
   const handleDelete = async (id) => {
     if (!window.confirm('האם למחוק עובד זה?')) return;
-    dispatch(deleteEmployee(id));
+    const result = await dispatch(deleteEmployee(id));
+    if (!result.error) showSuccess('העובד נמחק בהצלחה');
   };
 
   const ORDER_STATUS_LABEL = {
@@ -206,8 +226,20 @@ const Employees = () => {
     dispatch(fetchEmployeeActiveOrders(emp._id));
   };
 
-  const getRoleColor  = (role) => ({ MANAGER: 'error', CARPENTER: 'primary', WAREHOUSE: 'warning', SALES: 'success', DRIVER: 'secondary' }[role] || 'default');
-  const getRoleLabel  = (role) => ({ MANAGER: 'מנהל', CARPENTER: 'נגר', WAREHOUSE: 'מחסנאי', SALES: 'מכירות', DRIVER: 'נהג' }[role] || role);
+  const openDriverMonth = (emp) => {
+    if (emp?.role !== 'DRIVER') return;
+    setDriverMonthEmployee(emp);
+    setDriverMonthOpen(true);
+    dispatch(fetchDriverMonthlyDeliveries(emp._id));
+  };
+
+  const DELIVERY_TYPE_LABEL = {
+    TO_CARPENTER: 'הובלה לנגר',
+    TO_CUSTOMER: 'הובלה לבית הלקוח',
+  };
+
+  const getRoleColor  = (role) => ({ MANAGER: 'error', CARPENTER: 'primary', WAREHOUSE: 'warning', SALES: 'success', DRIVER: 'info' }[role] || 'default');
+  const getRoleLabel  = (role) => ({ MANAGER: 'מנהל', CARPENTER: 'נגר', WAREHOUSE: 'מחסנאי', SALES: 'מכירות', DRIVER: 'מוביל' }[role] || role);
   const getEmploymentLabel = (type) => ({ FULL_TIME: 'משרה מלאה', PART_TIME: 'חלקית', FREELANCE: 'פרילנס' }[type] || '-');
 
   const filteredEmployees = employees
@@ -242,35 +274,36 @@ const Employees = () => {
   );
 
   return (
-    <Box>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 3, alignItems: 'center' }}>
-        <Typography variant="h4" sx={{ fontWeight: 'bold', color: '#5D4037' }}>
-          ניהול צוות הנגרייה
-        </Typography>
-        <Button variant="contained" startIcon={<PersonAddIcon />} onClick={handleOpenAdd}>
-          הוסף עובד חדש
-        </Button>
-      </Box>
+    <Box sx={{ width: '100%', maxWidth: '100%', minWidth: 0, boxSizing: 'border-box' }}>
+      <PageHeader
+        title="ניהול צוות הנגרייה"
+        description="הוספה, עריכה וסינון עובדים — נגרים, מחסן, מכירות ומובילים."
+        action={
+          <Button variant="contained" color="primary" startIcon={<PersonAddIcon />} onClick={handleOpenAdd} sx={{ width: { xs: '100%', sm: 'auto' } }}>
+            הוסף עובד חדש
+          </Button>
+        }
+      />
 
       {/* ── שורת סינון ── */}
       <Paper sx={{ p: 2, mb: 2.5, borderRadius: 3, boxShadow: 'none', border: '1px solid #E0D5CC', bgcolor: '#FBF7F4' }}>
         <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center' }}>
           <TextField
             size="small" label="🔍 חיפוש לפי שם" value={filterName}
-            onChange={e => setFilterName(e.target.value)} sx={{ minWidth: 180 }}
+            onChange={e => setFilterName(e.target.value)} sx={{ minWidth: { xs: '100%', sm: 180 }, flex: { xs: '1 1 100%', sm: '0 1 auto' } }}
           />
           <TextField select size="small" label="תפקיד" value={filterRole}
-            onChange={e => setFilterRole(e.target.value)} sx={{ minWidth: 140 }}>
+            onChange={e => setFilterRole(e.target.value)} sx={{ minWidth: { xs: '100%', sm: 140 }, flex: { xs: '1 1 100%', sm: '0 1 auto' } }}>
             {/* נוסף key */}
             <MenuItem key="all-roles" value="">הכל</MenuItem> 
             <MenuItem key="CARPENTER" value="CARPENTER">נגר</MenuItem>
             <MenuItem key="WAREHOUSE" value="WAREHOUSE">מחסנאי</MenuItem>
             <MenuItem key="SALES" value="SALES">מכירות</MenuItem>
-            <MenuItem key="DRIVER" value="DRIVER">נהג</MenuItem>
+            <MenuItem key="DRIVER" value="DRIVER">מוביל</MenuItem>
             <MenuItem key="MANAGER" value="MANAGER">מנהל</MenuItem>
           </TextField>
           <TextField select size="small" label="סוג העסקה" value={filterEmployment}
-            onChange={e => setFilterEmployment(e.target.value)} sx={{ minWidth: 150 }}>
+            onChange={e => setFilterEmployment(e.target.value)} sx={{ minWidth: { xs: '100%', sm: 150 }, flex: { xs: '1 1 100%', sm: '0 1 auto' } }}>
             {/* נוסף key */}
             <MenuItem key="all-employment" value="">הכל</MenuItem> 
             <MenuItem key="FULL_TIME" value="FULL_TIME">משרה מלאה</MenuItem>
@@ -280,10 +313,10 @@ const Employees = () => {
           <TextField
             size="small" label="ותק מינימלי (שנים)" type="number" value={filterMinSeniority}
             onChange={e => setFilterMinSeniority(e.target.value)}
-            sx={{ minWidth: 160 }} inputProps={{ min: 0 }}
+            sx={{ minWidth: { xs: '100%', sm: 160 }, flex: { xs: '1 1 100%', sm: '0 1 auto' } }} inputProps={{ min: 0 }}
           />
           <TextField select size="small" label="מיון לפי" value={sortBy}
-            onChange={e => setSortBy(e.target.value)} sx={{ minWidth: 140 }}>
+            onChange={e => setSortBy(e.target.value)} sx={{ minWidth: { xs: '100%', sm: 140 }, flex: { xs: '1 1 100%', sm: '0 1 auto' } }}>
             {/* נוסף key */}
             <MenuItem key="sort-name" value="name">שם</MenuItem> 
             {/* נוסף key */}
@@ -298,7 +331,7 @@ const Employees = () => {
               ✕ נקה סינון
             </Button>
           )}
-          <Typography variant="caption" color="text.secondary" sx={{ mr: 'auto' }}>
+          <Typography variant="caption" color="text.secondary" sx={{ width: { xs: '100%', sm: 'auto' }, textAlign: { xs: 'center', sm: 'inherit' }, mr: { sm: 'auto' } }}>
             {filteredEmployees.length} / {employees.length} עובדים
           </Typography>
         </Box>
@@ -342,7 +375,7 @@ const Employees = () => {
                 <TableRow key={emp._id} hover onClick={() => openEmployeeView(emp)} sx={{ cursor: 'pointer' }}>
                   <TableCell>
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                      <Avatar sx={{ bgcolor: 'secondary.main' }}>{emp.fullName?.[0]}</Avatar>
+                      <Avatar sx={{ bgcolor: 'primary.main', color: 'primary.contrastText' }}>{emp.fullName?.[0]}</Avatar>
                       <Box>
                         <Typography sx={{ fontWeight: 500 }}>{emp.fullName}</Typography>
                         <Typography variant="caption" color="text.secondary">{emp.idNumber}</Typography>
@@ -371,41 +404,85 @@ const Employees = () => {
                   <TableCell>
                     {emp.role === 'WAREHOUSE' && emp.warehouse?.name ? emp.warehouse.name : '-'}
                   </TableCell>
-                  <TableCell align="center">
-                    <Tooltip title="צפייה בפרטים">
-                      <IconButton color="info" onClick={(e) => { e.stopPropagation(); openEmployeeView(emp); }}>
-                        <VisibilityIcon />
-                      </IconButton>
-                    </Tooltip>
-                    {(emp.role === 'CARPENTER' || emp.role === 'SALES') && (
-                      <Tooltip title="מפרט הזמנות פעילות">
+                  <TableCell align="center" sx={{ verticalAlign: 'middle', py: 1, width: 1, minWidth: 200 }}>
+                    <Box
+                      sx={{
+                        display: 'flex',
+                        justifyContent: 'center',
+                        alignItems: 'center',
+                        flexWrap: 'nowrap',
+                        gap: 0.25,
+                      }}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <Tooltip title="צפייה בפרטים">
                         <IconButton
-                          color="warning"
-                          onClick={(e) => { e.stopPropagation(); openEmployeeOrdersSpec(emp); }}
+                          size="small"
+                          onClick={(e) => { e.stopPropagation(); openEmployeeView(emp); }}
+                          sx={{ color: '#1565C0', width: 36, height: 36 }}
                         >
-                          <ListAltIcon />
+                          <VisibilityIcon sx={{ fontSize: 20 }} />
                         </IconButton>
                       </Tooltip>
-                    )}
-                    <Tooltip title="עריכה">
-                      <IconButton color="primary" onClick={(e) => { e.stopPropagation(); handleOpenEdit(emp); }}>
-                        <EditIcon />
-                      </IconButton>
-                    </Tooltip>
-                    <Tooltip title="מחיקה">
-                      <IconButton color="error" onClick={(e) => { e.stopPropagation(); handleDelete(emp._id); }}>
-                        <DeleteIcon />
-                      </IconButton>
-                    </Tooltip>
-                    {emp.contractFile && (
-                      <Tooltip title="הורד חוזה">
-                        <IconButton color="success" component="a"
-                          onClick={(e) => e.stopPropagation()}
-                          href={`http://localhost:5000/${emp.contractFile}`} target="_blank">
-                          <UploadFileIcon />
+                      {(emp.role === 'CARPENTER' || emp.role === 'SALES' || emp.role === 'DRIVER') ? (
+                        <Tooltip
+                          title={
+                            emp.role === 'DRIVER'
+                              ? 'הובלות שביצע החודש'
+                              : 'מפרט הזמנות פעילות'
+                          }
+                        >
+                          <IconButton
+                            size="small"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (emp.role === 'DRIVER') openDriverMonth(emp);
+                              else openEmployeeOrdersSpec(emp);
+                            }}
+                            sx={{ color: '#B45309', width: 36, height: 36 }}
+                          >
+                            <ListAltIcon sx={{ fontSize: 20 }} />
+                          </IconButton>
+                        </Tooltip>
+                      ) : (
+                        <Box sx={{ width: 36, height: 36, flexShrink: 0 }} aria-hidden />
+                      )}
+                      <Tooltip title="עריכה">
+                        <IconButton
+                          size="small"
+                          onClick={(e) => { e.stopPropagation(); handleOpenEdit(emp); }}
+                          sx={{ color: '#5D4037', width: 36, height: 36 }}
+                        >
+                          <EditIcon sx={{ fontSize: 20 }} />
                         </IconButton>
                       </Tooltip>
-                    )}
+                      <Tooltip title="מחיקה">
+                        <IconButton
+                          size="small"
+                          onClick={(e) => { e.stopPropagation(); handleDelete(emp._id); }}
+                          sx={{ color: '#C62828', width: 36, height: 36 }}
+                        >
+                          <DeleteIcon sx={{ fontSize: 20 }} />
+                        </IconButton>
+                      </Tooltip>
+                      {emp.contractFile ? (
+                        <Tooltip title="הורד חוזה">
+                          <IconButton
+                            size="small"
+                            component="a"
+                            onClick={(e) => e.stopPropagation()}
+                            href={`http://localhost:5000/${emp.contractFile}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            sx={{ color: '#2E7D32', width: 36, height: 36 }}
+                          >
+                            <UploadFileIcon sx={{ fontSize: 20 }} />
+                          </IconButton>
+                        </Tooltip>
+                      ) : (
+                        <Box sx={{ width: 36, height: 36, flexShrink: 0 }} aria-hidden />
+                      )}
+                    </Box>
                   </TableCell>
                 </TableRow>
               ))}
@@ -451,7 +528,7 @@ const Employees = () => {
                   <MenuItem key="CARPENTER" value="CARPENTER">נגר</MenuItem>,
                   <MenuItem key="WAREHOUSE" value="WAREHOUSE">מחסנאי</MenuItem>,
                   <MenuItem key="SALES" value="SALES">איש מכירות</MenuItem>,
-                  <MenuItem key="DRIVER" value="DRIVER">נהג</MenuItem>,
+                  <MenuItem key="DRIVER" value="DRIVER">מוביל</MenuItem>,
                   <MenuItem key="MANAGER" value="MANAGER">מנהל</MenuItem>
                 ]
               })}
@@ -535,7 +612,8 @@ const Employees = () => {
         </DialogActions>
       </Dialog>
       {/* ===== מודל צפייה ===== */}
-      <Dialog open={viewOpen} onClose={() => setViewOpen(false)} fullWidth maxWidth="sm">
+      <Dialog open={viewOpen} onClose={() => setViewOpen(false)} fullWidth maxWidth="sm"
+        PaperProps={{ sx: { direction: 'rtl' } }}>
         <DialogTitle sx={{ fontWeight: 'bold', color: '#5D4037', textAlign: 'center' }}>
           👤 {viewEmployee?.fullName}
         </DialogTitle>
@@ -562,12 +640,12 @@ const Employees = () => {
                 ['הערות', viewEmployee.notes || '-'],
               ].map(([label, value]) => (
                 <Box key={label} sx={{ 
-                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 2,
                   borderBottom: '1px solid #f0f0f0', py: 1, px: 1,
                   '&:last-of-type': { borderBottom: 'none' }
                 }}>
-                  <Typography color="text.secondary">{value}</Typography>
-                  <Typography sx={{ fontWeight: 600 }}>{label}</Typography>
+                  <Typography sx={{ fontWeight: 600, flexShrink: 0 }}>{label}</Typography>
+                  <Typography color="text.secondary" sx={{ textAlign: 'start' }}>{value}</Typography>
                 </Box>
               ))}
               {(viewEmployee.role === 'CARPENTER' || viewEmployee.role === 'WAREHOUSE') && (
@@ -710,6 +788,72 @@ const Employees = () => {
           <Button onClick={() => setOrdersSpecOpen(false)}>סגור</Button>
         </DialogActions>
       </Dialog>
+
+      {/* ===== מודל הובלות החודש לנהג ===== */}
+      <Dialog open={driverMonthOpen} onClose={() => setDriverMonthOpen(false)} fullWidth maxWidth="md">
+        <DialogTitle sx={{ fontWeight: 'bold', color: '#5D4037', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>
+          <span>🚚 הובלות החודש — {driverMonthEmployee?.fullName || ''}</span>
+          <Chip
+            label={`סה"כ: ${driverMonthEmployee ? (driverMonthlyByEmployee?.[driverMonthEmployee._id]?.count ?? 0) : 0}`}
+            sx={{ bgcolor: '#5D4037', color: '#fff', fontWeight: 700 }}
+          />
+        </DialogTitle>
+        <DialogContent dividers>
+          {!driverMonthEmployee ? null : (
+            driverMonthlyLoadingByEmployee?.[driverMonthEmployee._id] ? (
+              <Box sx={{ display: 'flex', justifyContent: 'center', py: 3 }}>
+                <CircularProgress size={24} />
+              </Box>
+            ) : (
+              (() => {
+                const summary = driverMonthlyByEmployee?.[driverMonthEmployee._id];
+                const stops = summary?.stops || [];
+                if (stops.length === 0) {
+                  return (
+                    <Alert severity="info">
+                      המוביל לא ביצע הובלות בחודש זה.
+                    </Alert>
+                  );
+                }
+                return (
+                  <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: 2 }}>
+                    <Table size="small">
+                      <TableHead>
+                        <TableRow>
+                          <TableCell>מס' הזמנה</TableCell>
+                          <TableCell>סוג הובלה</TableCell>
+                          <TableCell>איש קשר</TableCell>
+                          <TableCell>מוצא</TableCell>
+                          <TableCell>יעד</TableCell>
+                          <TableCell>הושלם ב</TableCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {stops.map((s, i) => (
+                          <TableRow key={`${s.orderId}-${i}`}>
+                            <TableCell>{s.orderId ? `#${String(s.orderId).slice(-6)}` : '—'}</TableCell>
+                            <TableCell>{DELIVERY_TYPE_LABEL[s.deliveryType] || s.deliveryType || '—'}</TableCell>
+                            <TableCell>{s.contactName || '—'}</TableCell>
+                            <TableCell>{s.sourceAddress || '—'}</TableCell>
+                            <TableCell>{s.destinationAddress || '—'}</TableCell>
+                            <TableCell>
+                              {s.completedAt ? new Date(s.completedAt).toLocaleString('he-IL') : '—'}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+                );
+              })()
+            )
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDriverMonthOpen(false)}>סגור</Button>
+        </DialogActions>
+      </Dialog>
+      <FeedbackSnackbar />
     </Box>
   );
 };

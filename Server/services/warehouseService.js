@@ -1,4 +1,5 @@
 import Order from "../models/Order.js";
+import { broadcastOrderUpdated } from "../utils/realtimeEvents.js";
 import BaseProduct from "../models/BaseProduct.js";
 import { nextMaterialCode } from "../utils/materialCode.js";
 import PurchaseList from "../models/PurchaseList.js";
@@ -125,6 +126,7 @@ const pickMaterial = async (orderId, materialId, warehouseUserId) => {
     await order.save();
   }
 
+  broadcastOrderUpdated({ orderId: String(orderId), kind: "material_picked" });
   return order;
 };
 
@@ -329,6 +331,7 @@ const markReadyForShipping = async (orderId) => {
 
   order.status = "READY_FOR_SHIPPING";
   await order.save();
+  broadcastOrderUpdated({ orderId: String(orderId), kind: "ready_for_shipping" });
   return order;
 };
 

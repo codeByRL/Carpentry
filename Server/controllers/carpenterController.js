@@ -5,6 +5,8 @@ import { nextMaterialCode } from "../utils/materialCode.js";
 import User from "../models/User.js";
 import { getUserNotifications, markAsRead } from "../services/notificationService.js";
 import * as carpenterService from "../services/carpenterService.js";
+import { recalculateCarpenterWorkload } from "../services/orderService.js";
+import { broadcastOrderUpdated } from "../utils/realtimeEvents.js";
 import { getOrderIdsPendingCarpenterStopsInActiveRuns } from "../services/deliveryService.js";
 
 /**
@@ -37,6 +39,10 @@ export const getMyOrders = async (req, res) => {
     const orderIds = orders.map((o) => o._id);
     const pendingCarpenterStopOrderIds = await getOrderIdsPendingCarpenterStopsInActiveRuns(orderIds);
 
+    const carpenterUser = await User.findById(carpenterId).select("fullName address phone");
+    const carpenterAddress = carpenterUser?.address?.trim() || "";
+    const carpenterPhone = carpenterUser?.phone?.trim() || "";
+
     // מעבדים את הנתונים כדי שיהיה קל לקליינט להציג
     const formattedOrders = orders.map(order => ({
       orderId: order._id,
@@ -53,6 +59,8 @@ export const getMyOrders = async (req, res) => {
       carpenterPaused: order.carpenterPaused,
       carpenterPauseReason: order.carpenterPauseReason,
       carpenterCompletedAt: order.carpenterCompletedAt,
+      carpenterAddress,
+      carpenterPhone,
       items: order.items.map(item => ({
         productName: item.catalogProduct.name,
         productImage:
@@ -72,6 +80,23 @@ export const getMyOrders = async (req, res) => {
     }));
 
     res.json(formattedOrders);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+/** פרופיל הנגר המחובר — לתוויות משלוח ועדכון מקומי אחרי עריכת עובד */
+export const getMyProfile = async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id).select("fullName address phone email");
+    if (!user) return res.status(404).json({ message: "User not found" });
+    res.json({
+      id: user._id,
+      fullName: user.fullName,
+      address: user.address?.trim() || "",
+      phone: user.phone?.trim() || "",
+      email: user.email,
+    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -107,6 +132,9 @@ export const markReceived = async (req, res) => {
     order.deliveryClaimedAt = null;
     await order.save();
 
+    await recalculateCarpenterWorkload(order.assignedCarpenter);
+
+    broadcastOrderUpdated({ orderId: String(orderId), kind: "carpenter_received" });
     res.json({ message: "Order marked as received", order });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -121,49 +149,48 @@ export const markDone = async (req, res) => {
   try {
     const { orderId } = req.params;
 
-    const order = await Order.findById(orderId).populate("items.catalogProduct");
-    if (!order) return res.status(404).json({ message: "ההזמנה לא נמצאה" });
+    const existing = await Order.findById(orderId);
+    if (!existing) return res.status(404).json({ message: "ההזמנה לא נמצאה" });
 
-    if (!order.assignedCarpenter || order.assignedCarpenter.toString() !== req.user.id) {
+    if (!existing.assignedCarpenter || existing.assignedCarpenter.toString() !== req.user.id) {
       return res.status(403).json({ message: "ההזמנה אינה משויכת אליך" });
     }
 
-    // אם כבר סומנה כהושלמה — לא להפחית פעם נוספת
-    if (order.carpenterCompletedAt) {
+    if (existing.carpenterCompletedAt) {
+      await recalculateCarpenterWorkload(existing.assignedCarpenter);
       return res.json({
         message: "העבודה כבר סומנה כהושלמה",
-        order,
+        order: existing,
         alreadyCompleted: true,
       });
     }
 
-    const totalWorkHours = order.items.reduce((sum, item) => {
-      return sum + (item.catalogProduct?.estimatedWorkTime || 0) * (item.quantity || 1);
-    }, 0);
-
-    order.status = "READY_FOR_SHIPPING";
-    order.carpenterCompletedAt = new Date();
-    order.carpenterPaused = false;
-    order.carpenterPauseReason = "";
-    // כשההזמנה חוזרת לבריכת המובילים (הפעם כרגל נגר→לקוח) — מבטיחים שאין claim ישן.
-    order.deliveryClaimedBy = null;
-    order.deliveryClaimedAt = null;
-    await order.save();
-
-    // עדכון עומס העבודה של הנגר (הפחתת שעות) — נחסום מתחת לאפס למקרה של אי-עקביות היסטורית
-    await User.findByIdAndUpdate(order.assignedCarpenter, [
+    const order = await Order.findOneAndUpdate(
+      {
+        _id: orderId,
+        assignedCarpenter: req.user.id,
+        $or: [{ carpenterCompletedAt: { $exists: false } }, { carpenterCompletedAt: null }],
+      },
       {
         $set: {
-          currentWorkloadHours: {
-            $max: [0, { $subtract: ["$currentWorkloadHours", totalWorkHours] }],
-          },
-          activeOrdersCount: {
-            $max: [0, { $subtract: ["$activeOrdersCount", 1] }],
-          },
+          status: "READY_FOR_SHIPPING",
+          carpenterCompletedAt: new Date(),
+          carpenterPaused: false,
+          carpenterPauseReason: "",
+          deliveryClaimedBy: null,
+          deliveryClaimedAt: null,
         },
       },
-    ]);
+      { new: true }
+    );
 
+    if (!order) {
+      return res.status(409).json({ message: "לא ניתן לסמן סיום — ההזמנה כבר עודכנה" });
+    }
+
+    await recalculateCarpenterWorkload(order.assignedCarpenter);
+
+    broadcastOrderUpdated({ orderId: String(orderId), kind: "carpenter_completed" });
     res.json({ message: "העבודה הסתיימה וממתינה למוביל", order });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -291,8 +318,18 @@ export const submitCharacterization = async (req, res) => {
       return res.status(403).json({ message: "Not assigned to you" });
     }
 
+    const workHours = Number(estimatedWorkTime);
+    if (!Number.isFinite(workHours) || workHours <= 0) {
+      return res.status(400).json({
+        message: "יש להזין זמן עבודה משוער (לפחות חצי שבוע)",
+      });
+    }
+    if (!Array.isArray(baseProducts) || baseProducts.length === 0) {
+      return res.status(400).json({ message: "יש להוסיף לפחות חומר גלם אחד" });
+    }
+
     product.baseProducts = baseProducts;
-    product.estimatedWorkTime = estimatedWorkTime;
+    product.estimatedWorkTime = workHours;
 
     // אפשרויות עץ לא מנוהלות יותר בטופס האפיון
     product.woodOptions = [];

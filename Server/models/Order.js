@@ -97,7 +97,9 @@ const OrderSchema = new Schema({
   carpenterPaused: { type: Boolean, default: false },
   carpenterPauseReason: { type: String, default: "" },
   carpenterPausedAt: { type: Date },
-  carpenterCompletedAt: { type: Date }
+  carpenterCompletedAt: { type: Date },
+  /** שעות עבודה שמורות בשיוך נגר — מקור לחישוב עומס (לא תלוי במוביל). */
+  committedWorkHours: { type: Number, default: null },
 }, { timestamps: true });
 
 export default model("Order", OrderSchema);

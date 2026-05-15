@@ -1,5 +1,5 @@
 // src/pages/ManagerNewOrders.jsx
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import {
   Box, Typography, Paper, Table, TableBody, TableCell, TableContainer,
@@ -12,10 +12,15 @@ import VisibilityIcon from '@mui/icons-material/Visibility';
 import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
 
 import { fetchAllOrders, assignCarpenterToOrder, assignBestCarpenterToOrder } from '../store/slices/ordersSlice';
+import { useFeedbackSnackbar } from '../hooks/useFeedbackSnackbar';
 import { fetchEmployees } from '../store/slices/employeesSlice';
+import { HOURS_PER_WORK_WEEK } from '../utils/workCalendar';
+import { useOrderLiveRefresh } from '../hooks/useOrderLiveRefresh';
+import PageHeader from '../components/PageHeader.jsx';
 
 const ManagerNewOrders = () => {
   const dispatch = useDispatch();
+  const { showSuccess, showError, FeedbackSnackbar } = useFeedbackSnackbar();
   const { orders, loading, error } = useSelector(state => state.orders);
   const { employees } = useSelector(state => state.employees);
 
@@ -31,8 +36,18 @@ const ManagerNewOrders = () => {
     dispatch(fetchEmployees());
   }, [dispatch]);
 
+  const refreshManagerOrders = useCallback(() => {
+    dispatch(fetchAllOrders());
+    dispatch(fetchEmployees());
+  }, [dispatch]);
+
+  useOrderLiveRefresh(refreshManagerOrders);
+
   const carpenters = employees.filter(e => e.role === 'CARPENTER');
-  const newOrders = orders.filter(o => !o.assignedCarpenter);
+  // הזמנות חדשות = ללא נגר משויך + לא הצעת מחיר (יש להמיר קודם להזמנה)
+  const newOrders = orders.filter(
+    (o) => !o.assignedCarpenter && o.status !== 'QUOTATION_PENDING'
+  );
 
   const handleViewOpen = (order) => {
     setSelectedOrder(order);
@@ -44,18 +59,26 @@ const ManagerNewOrders = () => {
     setCarpenterId('');
     setAssignError(null);
     setAssignOpen(true);
+    dispatch(fetchEmployees());
   };
 
   const handleAssign = async () => {
-    if (!carpenterId) return;
+    if (!carpenterId) {
+      showError('יש לבחור נגר מהרשימה לפני השיוך');
+      return;
+    }
     setAssigning(true);
     setAssignError(null);
     try {
       await dispatch(assignCarpenterToOrder({ orderId: selectedOrder._id, carpenterId })).unwrap();
       setAssignOpen(false);
+      showSuccess('הנגר שויך וההזמנה נשלחה למחסן בהצלחה');
       dispatch(fetchAllOrders({ status: 'ORDERED' }));
+      dispatch(fetchEmployees());
     } catch (err) {
-      setAssignError(err || 'שגיאה בשיוך נגר');
+      const msg = err || 'שגיאה בשיוך נגר';
+      setAssignError(msg);
+      showError(msg);
     } finally {
       setAssigning(false);
     }
@@ -68,9 +91,12 @@ const ManagerNewOrders = () => {
     try {
       await dispatch(assignBestCarpenterToOrder(selectedOrder._id)).unwrap();
       setAssignOpen(false);
+      showSuccess('הנגר שויך אוטומטית וההזמנה נשלחה למחסן בהצלחה');
       dispatch(fetchAllOrders());
     } catch (err) {
-      setAssignError(err || 'שגיאה בשיוך אוטומטי');
+      const msg = err || 'שגיאה בשיוך אוטומטי';
+      setAssignError(msg);
+      showError(msg);
     } finally {
       setAssigning(false);
     }
@@ -85,10 +111,11 @@ const ManagerNewOrders = () => {
   if (loading) return <Box sx={{ display: 'flex', justifyContent: 'center', mt: 6 }}><CircularProgress /></Box>;
 
   return (
-    <Box>
-      <Typography variant="h5" sx={{ mb: 3, fontWeight: 'bold', color: '#5D4037' }}>
-        🆕 הזמנות חדשות — ללא שיוך נגר
-      </Typography>
+    <Box sx={{ width: '100%', maxWidth: '100%', minWidth: 0 }}>
+      <PageHeader
+        title="הזמנות חדשות"
+        description="הזמנות שחיכו לשיוך נגר — שיוך ידני או שיוך אוטומטי לפי עומס שבועי."
+      />
 
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
 
@@ -165,7 +192,7 @@ const ManagerNewOrders = () => {
                       : '—'}
                   </TableCell>
                   <TableCell>
-                    <Box sx={{ display: 'flex', gap: 1 }}>
+                    <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
                       <Button
                         size="small"
                         variant="outlined"
@@ -332,7 +359,7 @@ const ManagerNewOrders = () => {
                 </Box>
                 <LinearProgress
                   variant="determinate"
-                  value={Math.min((c.currentWorkloadHours || 0) / 40 * 100, 100)}
+                  value={Math.min((c.currentWorkloadHours || 0) / (HOURS_PER_WORK_WEEK * 4) * 100, 100)}
                   color={getWorkloadColor(c.currentWorkloadHours || 0)}
                   sx={{ borderRadius: 2, height: 6 }}
                 />
@@ -356,6 +383,7 @@ const ManagerNewOrders = () => {
           <Button onClick={() => setAssignOpen(false)} disabled={assigning}>ביטול</Button>
         </DialogActions>
       </Dialog>
+      <FeedbackSnackbar />
     </Box>
   );
 };

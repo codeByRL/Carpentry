@@ -81,7 +81,10 @@ const UserSchema = new Schema({
   // כללי
   // ======================
   isActive: { type: Boolean, default: true },
-  notes: { type: String, default: "" }
+  notes: { type: String, default: "" },
+
+  /** הודעה למוביל: מסלול שוחרר כי לא בוצע ביום המיועד */
+  driverDeliveryNotice: { type: String, default: null },
 
 }, { timestamps: true });
 

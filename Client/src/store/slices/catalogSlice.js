@@ -51,9 +51,7 @@ export const fetchCarpenters = createAsyncThunk('catalog/fetchCarpenters', async
 // יצירת מוצר חדש (מנהל)
 export const createCatalogProduct = createAsyncThunk('catalog/create', async (formData, { rejectWithValue }) => {
   try {
-    const res = await API.post('/catalog', formData, {
-      headers: { 'Content-Type': 'multipart/form-data' }
-    });
+    const res = await API.post('/catalog', formData);
     return res.data.product;
   } catch (err) {
     return rejectWithValue(err.response?.data?.message || 'שגיאה ביצירת מוצר');
@@ -120,9 +118,7 @@ export const approveProduct = createAsyncThunk('catalog/approve', async ({ produ
 // עריכת מוצר (מנהל)
 export const updateCatalogProduct = createAsyncThunk('catalog/update', async ({ productId, formData }, { rejectWithValue }) => {
   try {
-    const res = await API.put(`/catalog/${productId}`, formData, {
-      headers: { 'Content-Type': 'multipart/form-data' }
-    });
+    const res = await API.put(`/catalog/${productId}`, formData);
     return res.data.product;
   } catch (err) {
     return rejectWithValue(err.response?.data?.message || 'שגיאה בעדכון מוצר');
@@ -203,9 +199,19 @@ const catalogSlice = createSlice({
         const idx = state.products.findIndex(p => p._id === action.payload._id);
         if (idx !== -1) state.products[idx] = action.payload;
       })
+      .addCase(updateCatalogProduct.pending, (state) => {
+        state.submitLoading = true;
+        state.submitError = null;
+      })
       .addCase(updateCatalogProduct.fulfilled, (state, action) => {
-        const idx = state.products.findIndex(p => p._id === action.payload._id);
+        state.submitLoading = false;
+        const id = String(action.payload._id ?? action.payload.id ?? "");
+        const idx = state.products.findIndex((p) => String(p._id) === id);
         if (idx !== -1) state.products[idx] = action.payload;
+      })
+      .addCase(updateCatalogProduct.rejected, (state, action) => {
+        state.submitLoading = false;
+        state.submitError = action.payload;
       })
       .addCase(deleteCatalogProduct.fulfilled, (state, action) => {
         state.products = state.products.filter(p => p._id !== action.payload);

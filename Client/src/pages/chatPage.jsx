@@ -1,28 +1,27 @@
-import React, { useEffect, useState, useRef, useCallback } from "react";
+import React, { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { useSelector, useDispatch } from "react-redux";
 import {
   Box,
   Typography,
   TextField,
-  Paper,
   InputAdornment,
   IconButton,
   CircularProgress,
   List,
-  ListItem,
-  ListItemText,
-  Divider,
+  ListItemButton,
   FormControl,
   InputLabel,
   Select,
   MenuItem,
+  Avatar,
+  Badge,
+  alpha,
 } from "@mui/material";
 import SendIcon from "@mui/icons-material/Send";
-import ArrowBackIcon from "@mui/icons-material/ArrowBack";
-import ChatIcon from "@mui/icons-material/Chat";
-import CircleIcon from "@mui/icons-material/Circle";
-import ClearIcon from "@mui/icons-material/Clear";
-import AddCommentIcon from "@mui/icons-material/AddComment";
+import ArrowForwardIcon from "@mui/icons-material/ArrowForward";
+import SearchIcon from "@mui/icons-material/Search";
+import CloseIcon from "@mui/icons-material/Close";
+import ChatBubbleOutlineIcon from "@mui/icons-material/ChatBubbleOutline";
 import { useParams, useNavigate } from "react-router-dom";
 import { useTheme } from "@mui/material/styles";
 import useMediaQuery from "@mui/material/useMediaQuery";
@@ -40,7 +39,6 @@ import {
   selectUnreadCounts,
   selectActiveChatPartners,
   selectStaffList,
-  selectActiveChatPartnerDetails,
   selectChatLoading,
   selectChatError,
   selectSearchResults,
@@ -51,6 +49,50 @@ import {
 import { selectUser } from "../store/slices/authSlice";
 import { authService } from "../services/authService";
 import { fetchNotifications } from "../store/slices/notificationsSlice";
+import { chatSocketClient } from "../utils/ChatSocketClient";
+
+/** פלטת בסגנון Gmail Chat */
+const G = {
+  listBg: "#f6f8fc",
+  threadBg: "#f6f8fc",
+  white: "#ffffff",
+  hover: "#eef3f8",
+  border: "#e0e0e0",
+  divider: "#dadce0",
+  textPrimary: "#202124",
+  textSecondary: "#5f6368",
+  otherBubble: "#ffffff",
+  accent: "#1a73e8",
+  compose: "#f1f3f4",
+};
+
+const ROLE_LABEL = {
+  MANAGER: "מנהל",
+  WAREHOUSE: "מחסנאי",
+  SALES: "מכירות",
+  CARPENTER: "נגר",
+  DRIVER: "מוביל",
+};
+
+const formatListTime = (dateStr) => {
+  if (!dateStr) return "";
+  const d = new Date(dateStr);
+  const now = new Date();
+  if (d.toDateString() === now.toDateString()) {
+    return d.toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit" });
+  }
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  if (d.toDateString() === yesterday.toDateString()) return "אתמול";
+  return d.toLocaleDateString("he-IL", { day: "numeric", month: "numeric" });
+};
+
+const avatarColor = (id = "") => {
+  const palette = ["#5D4037", "#6D4C41", "#8D6E63", "#A1887F", "#795548"];
+  let hash = 0;
+  for (let i = 0; i < id.length; i += 1) hash = id.charCodeAt(i) + ((hash << 5) - hash);
+  return palette[Math.abs(hash) % palette.length];
+};
 
 const ChatPage = () => {
   const { partnerId: urlPartnerId } = useParams();
@@ -59,32 +101,25 @@ const ChatPage = () => {
   const theme = useTheme();
   const isDesktop = useMediaQuery(theme.breakpoints.up("md"));
 
+  /** כתום מערכת (secondary) בשקיפות עדינה */
+  const accent = useMemo(
+    () => ({
+      selected: alpha(theme.palette.secondary.main, 0.12),
+      selectedHover: alpha(theme.palette.secondary.main, 0.2),
+      ownBubble: alpha(theme.palette.secondary.main, 0.1),
+      ownBorder: alpha(theme.palette.secondary.main, 0.22),
+    }),
+    [theme]
+  );
+
   const currentUserFromRedux = useSelector(selectUser);
   const currentUserFromStorage = authService.getCurrentUser();
   const currentUser = currentUserFromRedux || currentUserFromStorage;
   const authToken = useSelector((state) => state.auth.token) || authService.getToken();
-
-  if (!currentUser) {
-    return (
-      <Box
-        sx={{
-          height: "100vh",
-          display: "flex",
-          justifyContent: "center",
-          alignItems: "center",
-        }}
-      >
-        <Typography variant="h6">טוען משתמש...</Typography>
-      </Box>
-    );
-  }
-
-  const currentUserId = currentUser.id || currentUser._id;
+  const currentUserId = currentUser?.id || currentUser?._id;
 
   const activePartnerId = useSelector((state) => state.chat.activePartnerId);
-  const activeChatPartnerDetails = useSelector(
-    (state) => state.chat.activeChatPartnerDetails
-  );
+  const activeChatPartnerDetails = useSelector((state) => state.chat.activeChatPartnerDetails);
   const currentPartnerMessages = useSelector(selectMessagesForPartner);
   const unreadCounts = useSelector(selectUnreadCounts);
   const activeChatPartners = useSelector(selectActiveChatPartners);
@@ -96,6 +131,7 @@ const ChatPage = () => {
 
   const [currentMessageContent, setCurrentMessageContent] = useState("");
   const [searchRole, setSearchRole] = useState("");
+  const [listSearch, setListSearch] = useState("");
   const [showNewChatPanel, setShowNewChatPanel] = useState(false);
   const messagesEndRef = useRef(null);
 
@@ -124,11 +160,7 @@ const ChatPage = () => {
   }, [authToken, urlPartnerId, dispatch]);
 
   useEffect(() => {
-    if (
-      activePartnerId &&
-      activePartnerId !== "undefined" &&
-      activePartnerId !== urlPartnerId
-    ) {
+    if (activePartnerId && activePartnerId !== "undefined" && activePartnerId !== urlPartnerId) {
       dispatch(fetchChatHistory(activePartnerId));
       dispatch(markChatMessagesAsRead(activePartnerId))
         .unwrap()
@@ -162,45 +194,34 @@ const ChatPage = () => {
   }, [searchRole, dispatch, showNewChatPanel]);
 
   const handleSendMessage = () => {
-    if (
-      currentMessageContent.trim() &&
-      currentUserId &&
-      activePartnerId &&
-      activePartnerId !== "undefined"
-    ) {
-      dispatch(
-        sendChatMessage({
-          receiverId: activePartnerId,
-          content: currentMessageContent.trim(),
-          orderId: null,
-        })
-      )
-        .unwrap()
-        .then(() => {
-          setCurrentMessageContent("");
-        })
-        .catch((err) => {
-          console.error("Failed to send message:", err);
-        });
+    if (!currentMessageContent.trim() || !currentUserId || !activePartnerId || activePartnerId === "undefined") {
+      return;
     }
+    const content = currentMessageContent.trim();
+    const sentViaSocket = chatSocketClient.sendMessage({
+      receiverId: activePartnerId,
+      content,
+      orderId: null,
+    });
+    if (sentViaSocket) {
+      setCurrentMessageContent("");
+      return;
+    }
+    dispatch(sendChatMessage({ receiverId: activePartnerId, content, orderId: null }))
+      .unwrap()
+      .then(() => setCurrentMessageContent(""))
+      .catch((err) => console.error("Failed to send message:", err));
   };
 
   const handleSelectPartner = (id) => {
     if (id && id !== "undefined") {
-      // 1. קודם כל מבצעים ניווט לכתובת החדשה, זה יעדכן את ה-URL
       navigate(`/chat/${id}`, { replace: true });
-      
-      // 2. מעדכנים את הפרטנר הפעיל ברדוקס
       dispatch(setActivePartner(id));
-      
-      // 3. מנקים את החיפוש בתוך setTimeout קצר
-      // זה מונע מה-useEffect של החיפוש לגרום לרינדור מחדש בעייתי באותו רגע
-      // כמו כן, מסיים את פאנל יצירת הצ'אט החדש
       setTimeout(() => {
         setShowNewChatPanel(false);
         dispatch(clearSearchResults());
         setSearchRole("");
-      }, 100); // השהיה קצרה של 100 מילישניות
+      }, 100);
     }
   };
 
@@ -214,347 +235,529 @@ const ChatPage = () => {
     );
   };
 
-  // מותר לכולם ליזום שיחה חדשה (כמו מנהל)
-  const canInitiateNewChat = true; 
-
-  const renderPartnerList = (partners, title, typeColor, type) => (
-    <Box sx={{ mb: 3 }} key={`box-${type}-${title}`}>
-      <Typography
-        variant="h6"
-        sx={{ mb: 1, color: typeColor || theme.palette.primary.main }}
-      >
-        {title}
-      </Typography>
-      <List dense disablePadding sx={{ maxHeight: 200, overflowY: "auto" }}>
-        {(!partners || partners.length === 0) ? (
-          <ListItem key={`no-${type}-${title}`}>
-            <ListItemText secondary={`אין ${title.toLowerCase()} זמינים.`} />
-          </ListItem>
-        ) : (
-          partners
-            .filter(partner => {
-              const partnerId = partner.partnerId || partner._id || (partner.partner && partner.partner._id);
-              return partnerId !== currentUserId;
-            })
-            .map((partner) => {
-              const id = partner.partnerId || partner._id || (partner.partner && partner.partner._id);
-              if (!id || id === "undefined" || id === currentUserId) return null;
-
-              const unread = unreadCounts[id] || 0;
-              return (
-                <React.Fragment key={`frag-${id}`}>
-                  <ListItem
-                    key={`item-${id}`}
-                    component="button"
-                    onClick={() => handleSelectPartner(id)}
-                    selected={activePartnerId === id}
-                    sx={{
-                      borderRadius: theme.shape.borderRadius,
-                      mb: 0.5,
-                      textAlign: "right",
-                      bgcolor: activePartnerId === id ? theme.palette.action.selected : "transparent",
-                      "&:hover": {
-                        bgcolor: activePartnerId === id ? theme.palette.action.selected : theme.palette.action.hover,
-                      },
-                    }}
-                  >
-                    <ListItemText
-                      primary={getPartnerDisplayName(partner)}
-                      secondary={
-                        type === "active" && partner.lastMessage ? (
-                          <Typography variant="body2" color="text.secondary" noWrap>
-                            {partner.lastMessage}
-                          </Typography>
-                        ) : partner.role ? (
-                          <Typography variant="body2" color="text.secondary">
-                            {partner.role}
-                          </Typography>
-                        ) : null
-                      }
-                    />
-                    {unread > 0 && (
-                      <CircleIcon
-                        sx={{ fontSize: 10, color: theme.palette.warning.main, ml: 1 }}
-                      />
-                    )}
-                  </ListItem>
-                  <Divider component="li" key={`div-${id}`} />
-                </React.Fragment>
-              );
-            })
-        )}
-      </List>
-    </Box>
-  );
+  const getPartnerId = (partner) =>
+    partner?.partnerId || partner?._id || partner?.partner?._id;
 
   const isOwnMessage = (message) => {
-    if (!message || !message.sender) return false;
+    if (!message?.sender) return false;
     if (typeof message.sender === "object" && message.sender._id) {
       return message.sender._id === currentUserId;
     }
     return message.sender === currentUserId;
   };
 
-  const getSenderName = (message) => {
-    if (!message || !message.sender) return "משתמש";
-    if (typeof message.sender === "object" && message.sender.fullName) {
-      return message.sender.fullName;
-    }
-    return isOwnMessage(message) ? "אתה" : "משתמש";
-  };
+  const conversations = useMemo(() => {
+    const seen = new Set();
+    const rows = [];
+
+    (activeChatPartners || []).forEach((p) => {
+      const id = getPartnerId(p);
+      if (!id || id === "undefined" || id === currentUserId || seen.has(id)) return;
+      seen.add(id);
+      rows.push({
+        id,
+        name: getPartnerDisplayName(p),
+        preview: p.lastMessage || "אין הודעות עדיין",
+        time: p.lastUpdate,
+        unread: unreadCounts[id] || p.unreadCount || 0,
+        role: p.partnerRole || p.role,
+        hasChat: true,
+      });
+    });
+
+    (staffList || []).forEach((p) => {
+      const id = getPartnerId(p);
+      if (!id || id === "undefined" || id === currentUserId || seen.has(id)) return;
+      seen.add(id);
+      rows.push({
+        id,
+        name: getPartnerDisplayName(p),
+        preview: ROLE_LABEL[p.role] || p.role || "צוות",
+        time: null,
+        unread: unreadCounts[id] || 0,
+        role: p.role,
+        hasChat: false,
+      });
+    });
+
+    rows.sort((a, b) => {
+      if (a.unread !== b.unread) return b.unread - a.unread;
+      const ta = a.time ? new Date(a.time).getTime() : 0;
+      const tb = b.time ? new Date(b.time).getTime() : 0;
+      return tb - ta;
+    });
+
+    const q = listSearch.trim().toLowerCase();
+    if (!q) return rows;
+    return rows.filter((r) => r.name.toLowerCase().includes(q));
+  }, [activeChatPartners, staffList, unreadCounts, currentUserId, listSearch]);
+
+  if (!currentUser) {
+    return (
+      <Box sx={{ height: "50vh", display: "flex", justifyContent: "center", alignItems: "center" }}>
+        <CircularProgress size={28} />
+      </Box>
+    );
+  }
 
   const showListPanel = isDesktop || !activePartnerId;
   const showChatPanel = isDesktop || !!activePartnerId;
+
+  const partnerTitle =
+    activeChatPartnerDetails?.fullName ||
+    conversations.find((c) => c.id === activePartnerId)?.name ||
+    "טוען...";
+
+  const getMessageSenderLabel = (message, isUser) => {
+    if (isUser) return "אני";
+    if (typeof message?.sender === "object" && message.sender?.fullName) {
+      return message.sender.fullName;
+    }
+    return partnerTitle !== "טוען..." ? partnerTitle : "נמען";
+  };
+
+  const renderConversationRow = (row) => {
+    const selected = activePartnerId === row.id;
+    return (
+      <ListItemButton
+        key={row.id}
+        onClick={() => handleSelectPartner(row.id)}
+        selected={selected}
+        sx={{
+          py: 1.25,
+          px: 2,
+          gap: 1.5,
+          alignItems: "flex-start",
+          bgcolor: selected ? accent.selected : "transparent",
+          borderBottom: `1px solid ${G.divider}`,
+          "&:hover": { bgcolor: selected ? accent.selectedHover : G.hover },
+          "&.Mui-selected": { bgcolor: accent.selected },
+          "&.Mui-selected:hover": { bgcolor: accent.selectedHover },
+        }}
+      >
+        <Badge
+          badgeContent={row.unread}
+          color="error"
+          overlap="circular"
+          invisible={!row.unread}
+          sx={{ "& .MuiBadge-badge": { fontSize: 10, minWidth: 18, height: 18 } }}
+        >
+          <Avatar
+            sx={{
+              width: 40,
+              height: 40,
+              bgcolor: avatarColor(row.id),
+              fontSize: 16,
+              fontWeight: 700,
+            }}
+          >
+            {row.name?.[0] || "?"}
+          </Avatar>
+        </Badge>
+        <Box sx={{ flex: 1, minWidth: 0, textAlign: "right" }}>
+          <Box sx={{ display: "flex", justifyContent: "space-between", gap: 1, alignItems: "baseline" }}>
+            <Typography
+              sx={{
+                fontWeight: row.unread ? 700 : 500,
+                fontSize: 14,
+                color: G.textPrimary,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                flex: 1,
+              }}
+            >
+              {row.name}
+            </Typography>
+            {row.time && (
+              <Typography sx={{ fontSize: 11, color: G.textSecondary, flexShrink: 0 }}>
+                {formatListTime(row.time)}
+              </Typography>
+            )}
+          </Box>
+          <Typography
+            sx={{
+              fontSize: 13,
+              color: row.unread ? G.textPrimary : G.textSecondary,
+              fontWeight: row.unread ? 600 : 400,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              mt: 0.25,
+            }}
+          >
+            {row.preview}
+          </Typography>
+        </Box>
+      </ListItemButton>
+    );
+  };
 
   return (
     <Box
       sx={{
         display: "flex",
         flexDirection: { xs: "column", md: "row" },
-        alignItems: "stretch",
-        minHeight: { xs: "min(70dvh, 520px)", md: "calc(100vh - 64px)" },
-        height: { md: "calc(100vh - 64px)" },
-        maxHeight: { md: "calc(100vh - 64px)" },
-        bgcolor: theme.palette.background.default,
-        p: { xs: 1, sm: 2 },
         direction: "rtl",
-        gap: { xs: 1.5, md: 0 },
-        boxSizing: "border-box",
+        height: { xs: "min(78dvh, 640px)", md: "calc(100dvh - 56px - 48px)" },
+        minHeight: { xs: 420, md: 480 },
+        mx: { xs: -1.5, sm: -2.5 },
+        mb: { xs: -1, sm: -1 },
+        border: `1px solid ${G.border}`,
+        borderRadius: { xs: 2, md: 3 },
+        overflow: "hidden",
+        bgcolor: G.white,
+        boxShadow: "0 1px 3px rgba(60,64,67,0.15)",
       }}
     >
-      <Paper
-        elevation={3}
+      {/* רשימת שיחות — כמו Gmail */}
+      <Box
         sx={{
-          width: { xs: "100%", md: 350 },
+          width: { xs: "100%", md: 360 },
           maxWidth: "100%",
           flexShrink: 0,
-          ml: { xs: 0, md: 2 },
-          borderRadius: 3,
           display: showListPanel ? "flex" : "none",
           flexDirection: "column",
-          p: { xs: 1.5, sm: 2 },
-          maxHeight: { md: "100%" },
-          overflow: "hidden",
-        }}
-      >
-        <Typography
-          variant="h5"
-          sx={{
-            mb: 2,
-            fontWeight: "bold",
-            display: "flex",
-            alignItems: "center",
-            fontSize: { xs: "1.15rem", sm: "1.5rem" },
-            flexWrap: "wrap",
-            gap: 0.5,
-          }}
-        >
-          <ChatIcon sx={{ ml: 1 }} />
-          שיחות
-          <IconButton
-            color="primary"
-            onClick={() => setShowNewChatPanel(!showNewChatPanel)}
-            sx={{ mr: "auto" }}
-          >
-            {showNewChatPanel ? <ClearIcon /> : <AddCommentIcon />}
-          </IconButton>
-        </Typography>
-
-        {showNewChatPanel && (
-          <Box
-            sx={{
-              mb: 3,
-              p: 2,
-              border: `1px solid ${theme.palette.divider}`,
-              borderRadius: 2,
-            }}
-          >
-            <FormControl fullWidth size="small" sx={{ mb: 1 }}>
-              <InputLabel id="search-role-label">סנן לפי תפקיד</InputLabel>
-              <Select
-                labelId="search-role-label"
-                value={searchRole}
-                label="סנן לפי תפקיד"
-                onChange={(e) => setSearchRole(e.target.value)}
-              >
-                <MenuItem value="">
-                  <em>כל התפקידים</em>
-                </MenuItem>
-                {/* רשימת תפקידים מלאה לכולם (כמו מנהל) */}
-                <MenuItem value="MANAGER">מנהל</MenuItem>
-                <MenuItem value="WAREHOUSE">מחסנאי</MenuItem>
-                <MenuItem value="SALES">מכירות</MenuItem>
-                <MenuItem value="CARPENTER">נגר</MenuItem>
-                <MenuItem value="DRIVER">נהג</MenuItem>
-              </Select>
-            </FormControl>
-
-            {searchLoading ? (
-              <Box sx={{ display: "flex", justifyContent: "center", p: 1 }}>
-                <CircularProgress size={20} />
-              </Box>
-            ) : (
-              searchResults.length > 0 && (
-                <List dense sx={{ maxHeight: 150, overflowY: "auto" }}>
-                  {searchResults.map((user) => (
-                    <ListItem
-                      key={`sr-${user._id}`}
-                      component="button"
-                      onClick={() => handleSelectPartner(user._id)}
-                    >
-                      <ListItemText primary={user.fullName} secondary={user.role} />
-                    </ListItem>
-                  ))}
-                </List>
-              )
-            )}
-          </Box>
-        )}
-
-        <Box sx={{ flexGrow: 1, overflowY: "auto" }}>
-          {activeChatPartners.length > 0 &&
-            renderPartnerList(activeChatPartners, "שיחות קיימות", theme.palette.primary.main, "active")}
-          {staffList.length > 0 &&
-            renderPartnerList(staffList, "צוות זמין", theme.palette.secondary.main, "staff")}
-        </Box>
-      </Paper>
-
-      <Paper
-        elevation={3}
-        sx={{
-          flex: 1,
-          minWidth: 0,
-          borderRadius: 3,
-          display: showChatPanel ? "flex" : "none",
-          flexDirection: "column",
-          overflow: "hidden",
-          minHeight: { xs: showChatPanel ? "min(65dvh, 480px)" : 0, md: 0 },
+          bgcolor: G.listBg,
+          borderLeft: { md: `1px solid ${G.border}` },
+          minHeight: 0,
         }}
       >
         <Box
           sx={{
+            px: 2,
+            py: 1.5,
             display: "flex",
             alignItems: "center",
-            p: 2,
-            borderBottom: `1px solid ${theme.palette.divider}`,
+            gap: 1,
+            bgcolor: G.white,
+            borderBottom: `1px solid ${G.divider}`,
           }}
         >
+          <Typography sx={{ fontWeight: 700, fontSize: 16, color: G.textPrimary, flex: 1 }}>
+            צ׳אט
+          </Typography>
+          <IconButton
+            size="small"
+            onClick={() => setShowNewChatPanel((v) => !v)}
+            sx={{
+              bgcolor: showNewChatPanel ? accent.selected : G.compose,
+              "&:hover": { bgcolor: G.hover },
+            }}
+            aria-label={showNewChatPanel ? "סגור חיפוש אנשי קשר" : "חיפוש אנשי קשר"}
+          >
+            {showNewChatPanel ? <CloseIcon fontSize="small" /> : <SearchIcon fontSize="small" />}
+          </IconButton>
+        </Box>
+
+        <Box sx={{ px: 1.5, py: 1, bgcolor: G.white, borderBottom: `1px solid ${G.divider}` }}>
+          <TextField
+            fullWidth
+            size="small"
+            placeholder="חיפוש בשיחות"
+            value={listSearch}
+            onChange={(e) => setListSearch(e.target.value)}
+            sx={{
+              "& .MuiOutlinedInput-root": {
+                borderRadius: 2,
+                bgcolor: G.compose,
+                fontSize: 14,
+                "& fieldset": { border: "none" },
+              },
+            }}
+            InputProps={{
+              startAdornment: (
+                <InputAdornment position="start">
+                  <SearchIcon sx={{ fontSize: 20, color: G.textSecondary }} />
+                </InputAdornment>
+              ),
+            }}
+          />
+        </Box>
+
+        {showNewChatPanel && (
+          <Box sx={{ px: 1.5, py: 1.5, bgcolor: G.white, borderBottom: `1px solid ${G.divider}` }}>
+            <FormControl fullWidth size="small" sx={{ mb: 1 }}>
+              <InputLabel id="search-role-label">תפקיד</InputLabel>
+              <Select
+                labelId="search-role-label"
+                value={searchRole}
+                label="תפקיד"
+                onChange={(e) => setSearchRole(e.target.value)}
+                sx={{ borderRadius: 2, bgcolor: G.compose }}
+              >
+                <MenuItem value="">
+                  <em>כל התפקידים</em>
+                </MenuItem>
+                <MenuItem value="MANAGER">מנהל</MenuItem>
+                <MenuItem value="WAREHOUSE">מחסנאי</MenuItem>
+                <MenuItem value="SALES">מכירות</MenuItem>
+                <MenuItem value="CARPENTER">נגר</MenuItem>
+                <MenuItem value="DRIVER">מוביל</MenuItem>
+              </Select>
+            </FormControl>
+            {searchLoading ? (
+              <Box sx={{ display: "flex", justifyContent: "center", py: 1 }}>
+                <CircularProgress size={22} />
+              </Box>
+            ) : (
+              <List dense disablePadding sx={{ maxHeight: 160, overflowY: "auto" }}>
+                {searchResults.map((u) => (
+                  <ListItemButton key={u._id} onClick={() => handleSelectPartner(u._id)} sx={{ borderRadius: 1 }}>
+                    <Avatar sx={{ width: 32, height: 32, ml: 1, bgcolor: avatarColor(u._id), fontSize: 13 }}>
+                      {u.fullName?.[0]}
+                    </Avatar>
+                    <Box sx={{ minWidth: 0 }}>
+                      <Typography sx={{ fontSize: 14, fontWeight: 600 }}>{u.fullName}</Typography>
+                      <Typography sx={{ fontSize: 12, color: G.textSecondary }}>
+                        {ROLE_LABEL[u.role] || u.role}
+                      </Typography>
+                    </Box>
+                  </ListItemButton>
+                ))}
+              </List>
+            )}
+          </Box>
+        )}
+
+        <List dense disablePadding sx={{ flex: 1, overflowY: "auto", py: 0 }}>
+          {conversations.length === 0 ? (
+            <Typography sx={{ p: 3, textAlign: "center", color: G.textSecondary, fontSize: 14 }}>
+              {listSearch ? "לא נמצאו שיחות" : "אין שיחות — התחילי שיחה חדשה"}
+            </Typography>
+          ) : (
+            conversations.map(renderConversationRow)
+          )}
+        </List>
+      </Box>
+
+      {/* חלון שיחה */}
+      <Box
+        sx={{
+          flex: 1,
+          minWidth: 0,
+          display: showChatPanel ? "flex" : "none",
+          flexDirection: "column",
+          bgcolor: G.threadBg,
+          minHeight: 0,
+        }}
+      >
+        <Box
+          sx={{
+            px: 2,
+            py: 1.25,
+            display: "flex",
+            alignItems: "center",
+            gap: 1,
+            bgcolor: G.white,
+            borderBottom: `1px solid ${G.divider}`,
+            minHeight: 56,
+          }}
+        >
+          {!isDesktop && activePartnerId && (
+            <IconButton size="small" onClick={() => navigate("/chat")} aria-label="חזרה לרשימה">
+              <ArrowForwardIcon />
+            </IconButton>
+          )}
           {activePartnerId ? (
             <>
-              <IconButton onClick={() => navigate("/chat")} sx={{ ml: 1 }}>
-                <ArrowBackIcon />
-              </IconButton>
-              <Typography variant="h6" sx={{ fontWeight: "bold", flexGrow: 1 }}>
-                {activeChatPartnerDetails?.fullName || "טוען..."}
-              </Typography>
-              <Box sx={{ display: "flex", alignItems: "center" }}>
-                <CircleIcon sx={{ fontSize: 12, color: "success.main", ml: 1 }} />
-                <Typography variant="caption">מחובר</Typography>
+              <Avatar
+                sx={{
+                  width: 36,
+                  height: 36,
+                  bgcolor: avatarColor(activePartnerId),
+                  fontSize: 14,
+                  fontWeight: 700,
+                }}
+              >
+                {partnerTitle?.[0] || "?"}
+              </Avatar>
+              <Box sx={{ flex: 1, minWidth: 0 }}>
+                <Typography sx={{ fontWeight: 700, fontSize: 16, color: G.textPrimary }} noWrap>
+                  {partnerTitle}
+                </Typography>
+                <Typography sx={{ fontSize: 12, color: G.textSecondary }}>צ׳אט ישיר</Typography>
               </Box>
             </>
           ) : (
-            <Typography variant="h6" color="text.secondary">
-              בחר/י שיחה
+            <Typography sx={{ fontSize: 15, color: G.textSecondary, flex: 1 }}>
+              בחרו שיחה מהרשימה
             </Typography>
           )}
         </Box>
 
         <Box
           sx={{
-            flexGrow: 1,
-            p: 2,
+            flex: 1,
             overflowY: "auto",
-            bgcolor: "#f5f5f5",
+            px: { xs: 1.5, sm: 2.5 },
+            py: 2,
             display: "flex",
             flexDirection: "column",
+            minHeight: 0,
           }}
         >
-          {activePartnerId ? (
+          {!activePartnerId ? (
+            <Box sx={{ m: "auto", textAlign: "center", py: 6 }}>
+              <ChatBubbleOutlineIcon sx={{ fontSize: 72, color: alpha(G.accent, 0.35), mb: 2 }} />
+              <Typography sx={{ color: G.textSecondary, fontSize: 15 }}>
+                בחרו איש צוות מהרשימה כדי להתחיל לשוחח
+              </Typography>
+            </Box>
+          ) : (
             <>
               {chatLoading && (
                 <Box sx={{ display: "flex", justifyContent: "center", my: 2 }}>
-                  <CircularProgress size={24} />
+                  <CircularProgress size={24} sx={{ color: G.accent }} />
                 </Box>
               )}
               {chatError && (
-                <Typography color="error" sx={{ textAlign: "center", my: 2 }}>
+                <Typography sx={{ textAlign: "center", color: "error.main", my: 2, fontSize: 14 }}>
                   שגיאה בטעינת שיחה: {chatError}
                 </Typography>
               )}
               {currentPartnerMessages.map((msg, index) => {
                 const isUser = isOwnMessage(msg);
+                const showDateDivider =
+                  index === 0 ||
+                  new Date(msg.createdAt).toDateString() !==
+                    new Date(currentPartnerMessages[index - 1]?.createdAt).toDateString();
+
                 return (
-                  <Box
-                    key={`msg-${msg._id || index}`}
-                    sx={{
-                      display: "flex",
-                      justifyContent: isUser ? "flex-end" : "flex-start",
-                      mb: 1.5,
-                    }}
-                  >
+                  <React.Fragment key={msg._id || `msg-${index}`}>
+                    {showDateDivider && msg.createdAt && (
+                      <Box sx={{ display: "flex", justifyContent: "center", my: 1.5 }}>
+                        <Typography
+                          sx={{
+                            fontSize: 11,
+                            color: G.textSecondary,
+                            bgcolor: G.compose,
+                            px: 1.5,
+                            py: 0.35,
+                            borderRadius: 1,
+                          }}
+                        >
+                          {new Date(msg.createdAt).toLocaleDateString("he-IL", {
+                            weekday: "long",
+                            day: "numeric",
+                            month: "long",
+                          })}
+                        </Typography>
+                      </Box>
+                    )}
                     <Box
                       sx={{
-                        maxWidth: { xs: "88%", sm: "75%", md: "70%" },
-                        p: 1.5,
-                        borderRadius: 2,
-                        bgcolor: isUser ? theme.palette.primary.main : "white",
-                        color: isUser ? "white" : "black",
-                        boxShadow: "0 1px 2px rgba(0,0,0,0.1)",
+                        display: "flex",
+                        flexDirection: "column",
+                        alignItems: isUser ? "flex-start" : "flex-end",
+                        mb: 1,
                       }}
                     >
-                      {!isUser && (
-                        <Typography variant="caption" sx={{ fontWeight: "bold", display: "block", mb: 0.5 }}>
-                          {getSenderName(msg)}
-                        </Typography>
-                      )}
-                      <Typography variant="body1">{msg.content}</Typography>
-                      <Typography variant="caption" sx={{ display: "block", textAlign: "left", mt: 0.5, opacity: 0.7 }}>
-                        {msg.createdAt
-                          ? new Date(msg.createdAt).toLocaleTimeString("he-IL", {
-                              hour: "2-digit",
-                              minute: "2-digit",
-                            })
-                          : ""}
+                      <Typography
+                        sx={{
+                          fontSize: 12,
+                          fontWeight: 600,
+                          color: isUser ? theme.palette.secondary.dark : G.textSecondary,
+                          mb: 0.35,
+                          px: 0.5,
+                        }}
+                      >
+                        {getMessageSenderLabel(msg, isUser)}
                       </Typography>
+                      <Box
+                        sx={{
+                          maxWidth: { xs: "88%", sm: "72%" },
+                          px: 1.75,
+                          py: 1,
+                          borderRadius: isUser ? "18px 18px 4px 18px" : "18px 18px 18px 4px",
+                          bgcolor: isUser ? accent.ownBubble : G.otherBubble,
+                          color: G.textPrimary,
+                          border: isUser ? `1px solid ${accent.ownBorder}` : `1px solid ${G.divider}`,
+                          boxShadow: isUser ? "none" : "0 1px 2px rgba(60,64,67,0.12)",
+                        }}
+                      >
+                        <Typography sx={{ fontSize: 14.5, lineHeight: 1.45, whiteSpace: "pre-wrap" }}>
+                          {msg.content}
+                        </Typography>
+                        <Typography
+                          sx={{
+                            fontSize: 11,
+                            color: G.textSecondary,
+                            textAlign: "left",
+                            mt: 0.5,
+                            display: "block",
+                          }}
+                        >
+                          {msg.createdAt
+                            ? new Date(msg.createdAt).toLocaleTimeString("he-IL", {
+                                hour: "2-digit",
+                                minute: "2-digit",
+                              })
+                            : ""}
+                        </Typography>
+                      </Box>
                     </Box>
-                  </Box>
+                  </React.Fragment>
                 );
               })}
               <div ref={messagesEndRef} />
             </>
-          ) : (
-            <Box sx={{ m: "auto", textAlign: "center" }}>
-              <ChatIcon sx={{ fontSize: 60, color: "divider", mb: 2 }} />
-              <Typography color="text.secondary">אין שיחה פעילה</Typography>
-            </Box>
           )}
         </Box>
 
         {activePartnerId && (
-          <Box sx={{ p: 2, bgcolor: "white", display: "flex", alignItems: "center" }}>
-            <TextField
-              fullWidth
-              placeholder="הקלד/י הודעה..."
-              value={currentMessageContent}
-              onChange={(e) => setCurrentMessageContent(e.target.value)}
-              onKeyPress={(e) => e.key === "Enter" && handleSendMessage()}
-              InputProps={{
-                endAdornment: (
-                  <InputAdornment position="end">
-                    <IconButton
-                      onClick={handleSendMessage}
-                      color="primary"
-                      disabled={!currentMessageContent.trim()}
-                    >
-                      <SendIcon />
-                    </IconButton>
-                  </InputAdornment>
-                ),
+          <Box
+            sx={{
+              px: 2,
+              py: 1.5,
+              bgcolor: G.white,
+              borderTop: `1px solid ${G.divider}`,
+            }}
+          >
+            <Box
+              sx={{
+                display: "flex",
+                alignItems: "flex-end",
+                gap: 0.5,
+                bgcolor: G.compose,
+                borderRadius: 3,
+                px: 1.5,
+                py: 0.75,
               }}
-            />
+            >
+              <TextField
+                fullWidth
+                multiline
+                maxRows={4}
+                placeholder="כתבו הודעה..."
+                value={currentMessageContent}
+                onChange={(e) => setCurrentMessageContent(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    handleSendMessage();
+                  }
+                }}
+                variant="standard"
+                InputProps={{
+                  disableUnderline: true,
+                  sx: { fontSize: 14, py: 0.5 },
+                }}
+              />
+              <IconButton
+                onClick={handleSendMessage}
+                disabled={!currentMessageContent.trim()}
+                sx={{
+                  color: currentMessageContent.trim() ? G.accent : G.textSecondary,
+                }}
+                aria-label="שליחה"
+              >
+                <SendIcon />
+              </IconButton>
+            </Box>
           </Box>
         )}
-      </Paper>
+      </Box>
     </Box>
   );
 };

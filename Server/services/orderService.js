@@ -1,10 +1,12 @@
 // services/orderService.js
 import mongoose from "mongoose";
+import { broadcastOrderUpdated } from "../utils/realtimeEvents.js";
 import Order from "../models/Order.js";
 import CatalogProduct from "../models/CatalogProduct.js";
 import BaseProduct from "../models/BaseProduct.js";
 import FormicaModel from "../models/FormicaModel.js";
 import User from "../models/User.js";
+import { HOURS_PER_WORK_DAY } from "../config/workCalendar.js";
 import { checkMaterialsAvailability } from "./warehouseService.js";
 
 /**
@@ -46,7 +48,7 @@ const isValidFormicaMaterial = (mat) => {
  * חישוב תאריך אספקה משוער
  */
 export const calculateEstimatedDeliveryDate = (workloadHours) => {
-  const workDaysNeeded = Math.ceil(workloadHours / 8);
+  const workDaysNeeded = Math.ceil(workloadHours / HOURS_PER_WORK_DAY);
   const deliveryDate = new Date();
   deliveryDate.setDate(deliveryDate.getDate() + workDaysNeeded + 3);
   return deliveryDate;
@@ -339,6 +341,75 @@ const STATUS_LABELS = {
   DONE: "הושלם",
 };
 
+/** הזמנות שעדיין תורמות לעומס הנגר (לפני סיום עבודה בפועל). */
+const OPEN_CARPENTER_WORKLOAD_STATUSES = [
+  "ORDERED",
+  "WAITING_FOR_WAREHOUSE",
+  "WAITING_FOR_PICKING",
+  "WAITING_FOR_SUPPLY",
+  "READY_FOR_SHIPPING",
+  "IN_PROGRESS",
+];
+
+/** סכום שעות מהפריטים בקטלוג (בלי committedWorkHours). */
+export const calculateOrderWorkHoursFromCatalog = async (order) => {
+  if (order == null) return 0;
+  let hours = 0;
+  for (const item of order.items || []) {
+    const fromPopulate = item.catalogProduct?.estimatedWorkTime;
+    let perUnit = Number(fromPopulate);
+    if (!Number.isFinite(perUnit) || perUnit <= 0) {
+      const productId = item.catalogProduct?._id || item.catalogProduct;
+      if (productId) {
+        const p = await CatalogProduct.findById(productId).select("estimatedWorkTime").lean();
+        perUnit = Number(p?.estimatedWorkTime) || 0;
+      }
+    }
+    hours += perUnit * (Number(item.quantity) || 1);
+  }
+  return Math.max(0, hours);
+};
+
+/** סכום שעות עבודה להזמנה — מעדיף committedWorkHours שנשמר בשיוך נגר. */
+export const calculateOrderWorkHours = async (order) => {
+  if (order == null) return 0;
+  if (order.committedWorkHours != null) {
+    return Math.max(0, Number(order.committedWorkHours) || 0);
+  }
+  return calculateOrderWorkHoursFromCatalog(order);
+};
+
+/**
+ * שעות בתור — הזמנות משויכות שהנגר עדיין לא סיים (כולל בדרך). לא מחכים למוביל.
+ */
+export const computeAssignedPipelineHours = async (carpenterId) => {
+  if (!carpenterId) return 0;
+
+  const orders = await Order.find({
+    assignedCarpenter: carpenterId,
+    status: { $in: OPEN_CARPENTER_WORKLOAD_STATUSES },
+    $or: [{ carpenterCompletedAt: { $exists: false } }, { carpenterCompletedAt: null }],
+  }).populate("items.catalogProduct");
+
+  let hours = 0;
+  for (const order of orders) {
+    hours += await calculateOrderWorkHours(order);
+  }
+  return Math.max(0, hours);
+};
+
+/** עומס מוצג למנהל — זהה לתור המלא (כולל «בדרך»). */
+export const computeCarpenterWorkloadHours = computeAssignedPipelineHours;
+
+/**
+ * מחשב מחדש עומס נגר מההזמנות הפתוחות שלו — מקור אמת יחיד, ללא $inc שביר.
+ */
+export const recalculateCarpenterWorkload = async (carpenterId) => {
+  const normalized = await computeCarpenterWorkloadHours(carpenterId);
+  await User.findByIdAndUpdate(carpenterId, { $set: { currentWorkloadHours: normalized } });
+  return normalized;
+};
+
 export const assignCarpenterToOrder = async (orderId, carpenterId) => {
   try {
     const order = await Order.findById(orderId);
@@ -361,36 +432,10 @@ export const assignCarpenterToOrder = async (orderId, carpenterId) => {
       throw new Error("נגר לא תקין");
     }
 
-    // חישוב שעות עבודה
-    let totalWorkHours = 0;
-    for (const item of order.items) {
-      const product = await CatalogProduct.findById(item.catalogProduct);
-      if (product) totalWorkHours += (product.estimatedWorkTime || 0) * item.quantity;
-    }
-
-    // אם זו הקצאה מחדש (כבר היה נגר משויך) — נחסר ממנו את העומס לפני שנוסיף לחדש
     const previousCarpenterId = order.assignedCarpenter;
-    if (previousCarpenterId && String(previousCarpenterId) !== String(carpenterId)) {
-      await User.findByIdAndUpdate(previousCarpenterId, [
-        {
-          $set: {
-            currentWorkloadHours: {
-              $max: [0, { $subtract: ["$currentWorkloadHours", totalWorkHours] }],
-            },
-            activeOrdersCount: {
-              $max: [0, { $subtract: ["$activeOrdersCount", 1] }],
-            },
-          },
-        },
-      ]);
-    }
-
-    const estimatedDeliveryDate = calculateEstimatedDeliveryDate(
-      (newCarpenter.currentWorkloadHours || 0) + totalWorkHours
-    );
 
     order.assignedCarpenter = carpenterId;
-    order.estimatedDeliveryDate = estimatedDeliveryDate;
+    order.committedWorkHours = await calculateOrderWorkHoursFromCatalog(order);
     await order.save();
 
     const classified = await Order.findById(orderId).populate("requiredMaterials.product");
@@ -401,15 +446,16 @@ export const assignCarpenterToOrder = async (orderId, carpenterId) => {
     classified.unavailableMaterials = unavailableItems;
     classified.status =
       unavailableItems.length > 0 ? "WAITING_FOR_SUPPLY" : "WAITING_FOR_PICKING";
+
+    if (previousCarpenterId && String(previousCarpenterId) !== String(carpenterId)) {
+      await recalculateCarpenterWorkload(previousCarpenterId);
+    }
+    const pipelineHours = await computeAssignedPipelineHours(carpenterId);
+    classified.estimatedDeliveryDate = calculateEstimatedDeliveryDate(pipelineHours);
+    await recalculateCarpenterWorkload(carpenterId);
     await classified.save();
 
-    // לעדכן את העומס של הנגר רק אם זו הקצאה חדשה (לא אותו נגר שכבר היה משויך)
-    if (!previousCarpenterId || String(previousCarpenterId) !== String(carpenterId)) {
-      await User.findByIdAndUpdate(carpenterId, {
-        $inc: { currentWorkloadHours: totalWorkHours, activeOrdersCount: 1 },
-      });
-    }
-
+    broadcastOrderUpdated({ orderId: String(orderId), kind: "carpenter_assigned" });
     return classified;
   } catch (error) {
     throw error;

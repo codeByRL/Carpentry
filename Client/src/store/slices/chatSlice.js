@@ -171,10 +171,17 @@ const chatSlice = createSlice({
     
     addMessage: (state, action) => {
       const message = action.payload;
-      const partnerId = message.receiver?._id || message.receiver || message.partnerId;
-      if (!partnerId || !state.messages[partnerId]) return;
-      
-      if (!state.messages[partnerId].some(m => m._id === message._id)) {
+      const partnerId =
+        message.partnerId ||
+        message.receiver?._id ||
+        message.receiver;
+      if (!partnerId) return;
+
+      if (!state.messages[partnerId]) {
+        state.messages[partnerId] = [];
+      }
+
+      if (!state.messages[partnerId].some((m) => m._id === message._id)) {
         state.messages[partnerId].push(message);
       }
     },

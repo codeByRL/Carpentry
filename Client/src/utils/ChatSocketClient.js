@@ -1,90 +1,135 @@
-// client/src/utils/ChatSocketClient.js
 import { io } from "socket.io-client";
+
+const SOCKET_URL =
+  import.meta.env.VITE_SOCKET_URL ||
+  import.meta.env.VITE_REACT_APP_API_URL ||
+  "http://localhost:5001";
 
 class ChatSocketClient {
   constructor() {
     this.socket = null;
-    this.isConnected = this.isConnected.bind(this);
+    this._handlers = {
+      connect: new Set(),
+      disconnect: new Set(),
+      connectError: new Set(),
+      receiveMessage: new Set(),
+      messagesRead: new Set(),
+      activeChatsUpdated: new Set(),
+      orderUpdated: new Set(),
+    };
   }
 
   connect(token) {
-    if (this.socket && this.socket.connected) {
-      console.log("Socket already connected.");
-      return;
+    if (this.socket?.connected) return;
+
+    if (this.socket) {
+      this.socket.disconnect();
+      this.socket = null;
     }
 
-    // נסה להתחבר דרך auth.token תחילה
-    this.socket = io("ws://localhost:5001", {
-      auth: {
-        token: token,
-      },
-      // גם לשלוח ב-query למקרה ש-auth headers לא עובדים ב-middleware של הסרבר מסיבה כלשהי
-      query: { token: token }, 
-      transports: ['websocket'], // העדף websocket
-      forceNew: true, // לוודא שיוצר חיבור חדש
+    this.socket = io(SOCKET_URL, {
+      auth: { token },
+      query: { token },
+      transports: ["websocket", "polling"],
+      reconnection: true,
+      reconnectionAttempts: 10,
     });
 
-    console.log("Attempting to connect to chat socket...");
+    this.socket.on("connect", () => this._handlers.connect.forEach((fn) => fn()));
+    this.socket.on("disconnect", () => this._handlers.disconnect.forEach((fn) => fn()));
+    this.socket.on("connect_error", (err) =>
+      this._handlers.connectError.forEach((fn) => fn(err))
+    );
+    this.socket.on("receiveMessage", (msg) =>
+      this._handlers.receiveMessage.forEach((fn) => fn(msg))
+    );
+    this.socket.on("messagesRead", (data) =>
+      this._handlers.messagesRead.forEach((fn) => fn(data))
+    );
+    this.socket.on("activeChatsUpdated", (chats) =>
+      this._handlers.activeChatsUpdated.forEach((fn) => fn(chats))
+    );
+    this.socket.on("order:updated", (data) =>
+      this._handlers.orderUpdated.forEach((fn) => fn(data))
+    );
   }
 
   disconnect() {
     if (this.socket) {
-      console.log("Disconnecting chat socket.");
+      this.socket.removeAllListeners();
       this.socket.disconnect();
       this.socket = null;
     }
   }
 
   isConnected() {
-    return this.socket && this.socket.connected;
+    return !!(this.socket && this.socket.connected);
   }
 
-  // אירועי חיבור וניתוק
+  _on(event, callback) {
+    this._handlers[event]?.add(callback);
+  }
+
+  _off(event, callback) {
+    this._handlers[event]?.delete(callback);
+  }
+
   onConnect(callback) {
-    this.socket?.on("connect", callback);
+    this._on("connect", callback);
+  }
+  offConnect(callback) {
+    this._off("connect", callback);
   }
 
   onDisconnect(callback) {
-    this.socket?.on("disconnect", callback);
+    this._on("disconnect", callback);
+  }
+  offDisconnect(callback) {
+    this._off("disconnect", callback);
   }
 
   onConnectError(callback) {
-    this.socket?.on("connect_error", callback);
+    this._on("connectError", callback);
   }
 
-  // שליחת הודעות
   sendMessage({ receiverId, content, orderId }) {
-    if (this.socket && this.socket.connected) {
-      console.log("Emitting sendMessage:", { receiverId, content, orderId });
-      this.socket.emit("sendMessage", { receiverId, content, orderId });
-    } else {
-      console.error("Socket not connected, cannot send message.");
-    }
+    if (!this.socket?.connected) return false;
+    this.socket.emit("sendMessage", { receiverId, content, orderId });
+    return true;
   }
 
-  // קליטת הודעות חדשות
   onNewMessage(callback) {
-    this.socket?.on("receiveMessage", callback); // השרת שולח "receiveMessage"
+    this._on("receiveMessage", callback);
   }
-  
-  // סימון הודעות כנקראו
+  offNewMessage(callback) {
+    this._off("receiveMessage", callback);
+  }
+
   markAsRead({ senderId, receiverId }) {
-    if (this.socket && this.socket.connected) {
-      console.log("Emitting markAsRead:", { senderId, receiverId });
-      this.socket.emit("markAsRead", { senderId, receiverId });
-    } else {
-      console.error("Socket not connected, cannot mark messages as read.");
-    }
+    if (!this.socket?.connected) return false;
+    this.socket.emit("markAsRead", { senderId, receiverId });
+    return true;
   }
 
-  // אירוע כאשר הודעות מסומנות כנקראו על ידי הצד השני
   onMessagesRead(callback) {
-    this.socket?.on("messagesRead", callback);
+    this._on("messagesRead", callback);
+  }
+  offMessagesRead(callback) {
+    this._off("messagesRead", callback);
   }
 
-  // אירוע עדכון רשימת צ'אטים פעילים
   onActiveChatsUpdated(callback) {
-    this.socket?.on("activeChatsUpdated", callback);
+    this._on("activeChatsUpdated", callback);
+  }
+  offActiveChatsUpdated(callback) {
+    this._off("activeChatsUpdated", callback);
+  }
+
+  onOrderUpdated(callback) {
+    this._on("orderUpdated", callback);
+  }
+  offOrderUpdated(callback) {
+    this._off("orderUpdated", callback);
   }
 }
 

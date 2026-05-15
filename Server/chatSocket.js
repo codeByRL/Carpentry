@@ -71,8 +71,12 @@ export const initChatSocket = (httpServer) => {
   io.on("connection", async (socket) => {
     console.log("A user connected:", socket.user.id);
 
-    // הצטרפות לחדר אישי של המשתמש
+    // הצטרפות לחדר אישי + עדכוני הזמנות/מובילים
     socket.join(socket.user.id);
+    if (socket.user.role) {
+      socket.join(`role:${socket.user.role}`);
+    }
+    socket.join("orders:live");
 
     // עדכון סטטוס המשתמש למחובר
     try {

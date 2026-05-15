@@ -43,9 +43,12 @@ const login = async (req, res) => {
       user: {
         id: user._id,
         fullName: user.fullName,
+        email: user.email,
+        phone: user.phone || "",
+        address: user.address || "",
         role: user.role,
-        warehouse: user.warehouse
-      }
+        warehouse: user.warehouse,
+      },
     });
   } catch (e) {
     console.error("❌ Server error:", e);

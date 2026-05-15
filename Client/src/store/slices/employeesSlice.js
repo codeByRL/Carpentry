@@ -31,6 +31,18 @@ export const fetchEmployeeActiveOrders = createAsyncThunk('employees/fetchEmploy
   }
 });
 
+export const fetchDriverMonthlyDeliveries = createAsyncThunk(
+  'employees/fetchDriverMonthlyDeliveries',
+  async (driverId, { rejectWithValue }) => {
+    try {
+      const res = await API.get(`/delivery/driver/${driverId}/this-month`);
+      return { driverId, summary: res.data };
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || 'שגיאה בטעינת הובלות החודש של הנהג');
+    }
+  }
+);
+
 export const createEmployee = createAsyncThunk('employees/create', async (formData, { rejectWithValue }) => {
   try {
     const res = await API.post('/manager/employees', formData, {
@@ -71,6 +83,8 @@ const employeesSlice = createSlice({
     warehouses: [],
     employeeActiveOrders: {},
     activeOrdersLoadingByEmployee: {},
+    driverMonthlyByEmployee: {},
+    driverMonthlyLoadingByEmployee: {},
     loading: false,
     submitLoading: false,
     error: null,
@@ -110,6 +124,21 @@ const employeesSlice = createSlice({
       .addCase(fetchEmployeeActiveOrders.rejected, (state, action) => {
         const employeeId = action.meta.arg;
         state.activeOrdersLoadingByEmployee[employeeId] = false;
+        state.error = action.payload;
+      })
+
+      .addCase(fetchDriverMonthlyDeliveries.pending, (state, action) => {
+        const driverId = action.meta.arg;
+        state.driverMonthlyLoadingByEmployee[driverId] = true;
+      })
+      .addCase(fetchDriverMonthlyDeliveries.fulfilled, (state, action) => {
+        const { driverId, summary } = action.payload;
+        state.driverMonthlyLoadingByEmployee[driverId] = false;
+        state.driverMonthlyByEmployee[driverId] = summary;
+      })
+      .addCase(fetchDriverMonthlyDeliveries.rejected, (state, action) => {
+        const driverId = action.meta.arg;
+        state.driverMonthlyLoadingByEmployee[driverId] = false;
         state.error = action.payload;
       })
 

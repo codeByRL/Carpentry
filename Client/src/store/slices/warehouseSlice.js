@@ -1,6 +1,9 @@
 import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
 import API from '../../services/api';
 
+const purchaseSupplierKey = (item) =>
+  item?.supplierName || item?.product?.supplier || 'ללא ספק';
+
 export const fetchAllOrders = createAsyncThunk(
   'warehouse/fetchAllOrders',
   async (_, { rejectWithValue }) => {
@@ -11,7 +14,7 @@ export const fetchAllOrders = createAsyncThunk(
 
 export const fetchPurchaseList = createAsyncThunk(
   'warehouse/fetchPurchaseList',
-  async (_, { rejectWithValue }) => {
+  async (opts = {}, { rejectWithValue }) => {
     try { return (await API.get('/warehouse/purchase-list')).data; }
     catch (err) { return rejectWithValue(err.response?.data?.message || 'שגיאה'); }
   }
@@ -121,9 +124,16 @@ const warehouseSlice = createSlice({
       .addCase(fetchAllOrders.fulfilled, (state, a) => { state.loading = false; state.orders = a.payload; })
       .addCase(fetchAllOrders.rejected,  fail)
 
-      .addCase(fetchPurchaseList.pending,   load)
-      .addCase(fetchPurchaseList.fulfilled, (state, a) => { state.loading = false; state.purchaseList = a.payload; })
-      .addCase(fetchPurchaseList.rejected,  fail)
+      .addCase(fetchPurchaseList.pending, (state, action) => {
+        if (!action.meta.arg?.silent) load(state);
+      })
+      .addCase(fetchPurchaseList.fulfilled, (state, a) => {
+        if (!a.meta.arg?.silent) state.loading = false;
+        state.purchaseList = a.payload;
+      })
+      .addCase(fetchPurchaseList.rejected, (state, a) => {
+        if (!a.meta.arg?.silent) fail(state, a);
+      })
 
       .addCase(fetchAllBaseProducts.pending,   load)
       .addCase(fetchAllBaseProducts.fulfilled, (state, a) => { state.loading = false; state.baseProducts = a.payload; })
@@ -169,19 +179,28 @@ const warehouseSlice = createSlice({
       })
 
       // ─── ספקים ───────────────────────────────────────────
-      .addCase(markSupplierSentAction.fulfilled, (state, a) => {
-        // מעדכן את הפריטים של הספק ב-purchaseList
-        const updated = a.payload;
-        updated.forEach(item => {
-          const idx = state.purchaseList.findIndex(p => p._id === item._id);
-          if (idx !== -1) state.purchaseList[idx] = item;
+      .addCase(markSupplierSentAction.fulfilled, (state, action) => {
+        const supplierName = action.meta.arg;
+        const updated = Array.isArray(action.payload) ? action.payload : [];
+        const updatedById = new Map(
+          updated.map((item) => [String(item._id), item])
+        );
+        state.purchaseList = state.purchaseList.map((p) => {
+          if (purchaseSupplierKey(p) !== supplierName) return p;
+          const fromApi = updatedById.get(String(p._id));
+          if (fromApi) return fromApi;
+          return {
+            ...p,
+            status: 'SENT_TO_SUPPLIER',
+            sentAt: p.sentAt || new Date().toISOString(),
+          };
         });
       })
 
-      .addCase(markSupplierArrivedAction.fulfilled, (state, a) => {
-        // מסיר את כל הפריטים של הספק מהרשימה (כי הגיעו)
+      .addCase(markSupplierArrivedAction.fulfilled, (state, action) => {
+        const supplierName = action.meta.arg;
         state.purchaseList = state.purchaseList.filter(
-          p => p.status !== 'ARRIVED'
+          (p) => purchaseSupplierKey(p) !== supplierName
         );
       });
   }

@@ -1,4 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { useDispatch, useSelector } from "react-redux";
+import { useNavigate } from "react-router-dom";
 import {
   Alert,
   Box,
@@ -10,13 +12,28 @@ import {
   Link,
   Tab,
   Tabs,
-  TextField,
   Typography,
 } from "@mui/material";
 import LocalShippingIcon from "@mui/icons-material/LocalShipping";
 import RouteIcon from "@mui/icons-material/Route";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
-import API from "../services/api";
+import CalendarMonthIcon from "@mui/icons-material/CalendarMonth";
+import MarkChatUnreadIcon from "@mui/icons-material/MarkChatUnread";
+import {
+  fetchPendingDeliveries,
+  fetchMyTodayRun,
+  fetchMyMonthlyDeliveries,
+  completeDeliveryStop,
+  clearDeliveryError,
+  clearDeliveryInfo,
+  clearDriverReleaseNotice,
+} from "../store/slices/deliverySlice";
+import { fetchNotifications } from "../store/slices/notificationsSlice";
+import { fetchActiveChatPartners } from "../store/slices/chatSlice";
+import { useFeedbackSnackbar } from "../hooks/useFeedbackSnackbar";
+import { useOrderLiveRefresh } from "../hooks/useOrderLiveRefresh";
+import PageHeader from "../components/PageHeader.jsx";
+import { dashboardStatColor } from "../utils/dashboardStatPalette.js";
 
 const typeLabel = {
   TO_CARPENTER: "הובלה לנגר",
@@ -46,62 +63,103 @@ const getDestinationLine = (s) => {
   return `${type}: ${addr}`;
 };
 
-const DriverDeliveries = () => {
-  const [loading, setLoading] = useState(true);
-  const [claimLoading, setClaimLoading] = useState(false);
-  const [completeLoading, setCompleteLoading] = useState(false);
-  const [pendingPool, setPendingPool] = useState([]);
-  const [myRun, setMyRun] = useState(null);
-  const [desiredHours, setDesiredHours] = useState("8");
-  /** ברירת מחדל: הובלות שאני מבצע היום */
-  const [tab, setTab] = useState(1);
-  const [error, setError] = useState("");
+const DeliveryStations = ({ stop, showWaze = true }) => {
+  const s1 = stop?.station1;
+  const s2 = stop?.station2;
+  if (s1 && s2) {
+    return (
+      <Box sx={{ mt: 0.5 }}>
+        {[s1, s2].map((st, i) => (
+          <Box
+            key={`${st.type}-${i}`}
+            sx={{
+              mb: 1,
+              p: 1,
+              bgcolor: "#FFF8F3",
+              borderRadius: 1.5,
+              border: "1px solid #E8D5C8",
+            }}
+          >
+            <Typography sx={{ fontSize: 13, fontWeight: 700 }}>
+              תחנה {i + 1} — {st.label}
+              {st.name && st.name !== st.label ? `: ${st.name}` : ""}
+            </Typography>
+            <Typography sx={{ fontSize: 13, color: "#5D4037" }}>{st.address || "—"}</Typography>
+            {showWaze && st.wazeUrl && (
+              <Link href={st.wazeUrl} target="_blank" underline="none" sx={{ display: "inline-block", mt: 0.5 }}>
+                <Button size="small" variant="outlined" startIcon={<LocalShippingIcon />}>
+                  Waze לתחנה {i + 1}
+                </Button>
+              </Link>
+            )}
+          </Box>
+        ))}
+      </Box>
+    );
+  }
+  return (
+    <>
+      <Typography sx={{ fontSize: 13 }}>{getSourceLine(stop)}</Typography>
+      <Typography sx={{ fontSize: 13 }}>{getDestinationLine(stop)}</Typography>
+    </>
+  );
+};
 
-  const loadData = async () => {
-    try {
-      setLoading(true);
-      setError("");
-      const [pendingRes, myRunRes] = await Promise.all([
-        API.get("/delivery/pending"),
-        API.get("/delivery/my-today"),
-      ]);
-      setPendingPool(Array.isArray(pendingRes.data) ? pendingRes.data : []);
-      setMyRun(myRunRes.data || null);
-    } catch (e) {
-      setError(e.response?.data?.message || "שגיאה בטעינת נתוני משלוחים");
-    } finally {
-      setLoading(false);
-    }
+const DriverDeliveries = () => {
+  const dispatch = useDispatch();
+  const navigate = useNavigate();
+  const { showSuccess, showError, FeedbackSnackbar } = useFeedbackSnackbar();
+  const { user } = useSelector((s) => s.auth);
+  const { notifications } = useSelector((s) => s.notifications);
+  const chatState = useSelector((s) => s.chat);
+  const {
+    pendingPool,
+    myRun,
+    myMonthly,
+    loading,
+    completeLoading,
+    error,
+    info,
+    driverReleaseNotice,
+  } = useSelector((s) => s.delivery);
+
+  /** ברירת מחדל: הובלות במסלול היום (תכנון מסלול בדף נפרד בתפריט) */
+  const [tab, setTab] = useState(0);
+
+  const loadData = () => {
+    dispatch(fetchPendingDeliveries());
+    dispatch(fetchMyTodayRun());
+    dispatch(fetchMyMonthlyDeliveries());
+    dispatch(fetchNotifications());
+    dispatch(fetchActiveChatPartners());
   };
 
   useEffect(() => {
     loadData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const handleClaim = async () => {
-    try {
-      setClaimLoading(true);
-      setError("");
-      await API.post("/delivery/claim-my-today", { desiredHours: Number(desiredHours) });
-      await loadData();
-    } catch (e) {
-      setError(e.response?.data?.message || "שגיאה בתפיסת הובלות להיום");
-    } finally {
-      setClaimLoading(false);
-    }
-  };
+  useOrderLiveRefresh(loadData);
 
   const handleCompleteStop = async (stopId) => {
-    if (!myRun?._id) return;
-    try {
-      setCompleteLoading(true);
-      setError("");
-      await API.post("/delivery/complete-stop", { runId: myRun._id, stopId });
-      await loadData();
-    } catch (e) {
-      setError(e.response?.data?.message || "שגיאה בסימון הובלה כהושלמה");
-    } finally {
-      setCompleteLoading(false);
+    if (!myRun?._id) {
+      showError('אין מסלול פעיל לסימון ההובלה');
+      return;
+    }
+    const result = await dispatch(completeDeliveryStop({ runId: myRun._id, stopId }));
+    if (!result.error) {
+      loadData();
+      const run = result.payload?.run;
+      const allDone =
+        run?.status === "COMPLETED" ||
+        (run?.stops?.length > 0 && run.stops.every((s) => s.status === "COMPLETED"));
+      if (allDone) {
+        showSuccess("סיימת להיום — כל ההובלות במסלול הושלמו");
+      } else {
+        showSuccess("ההובלה סומנה כהושלמה");
+      }
+    } else {
+      showError(typeof result.payload === 'string' ? result.payload : 'שגיאה בסימון ההובלה כהושלמה');
     }
   };
 
@@ -115,55 +173,148 @@ const DriverDeliveries = () => {
     [myStops]
   );
 
-  if (loading) {
+  const { activeStops, emptyHint } = useMemo(() => {
+    if (tab === 0) {
+      return {
+        activeStops: myStops,
+        emptyHint: 'אין הובלות בתצוגה זו — תכנון המסלול מתבצע מתפריט «תכנון מסלול יומי».',
+      };
+    }
+    if (tab === 1) return { activeStops: myCarpenterStops, emptyHint: "אין הובלות בתצוגה זו" };
+    return { activeStops: myCustomerStops, emptyHint: "אין הובלות בתצוגה זו" };
+  }, [tab, myStops, myCarpenterStops, myCustomerStops]);
+
+  const unreadNotif = useMemo(
+    () => (notifications || []).filter((n) => !n.isRead && n.type !== "CHAT").length,
+    [notifications]
+  );
+  const chatUnread = useMemo(
+    () =>
+      (chatState?.activeChatPartners || []).reduce((a, p) => a + (Number(p.unreadCount) || 0), 0) || 0,
+    [chatState?.activeChatPartners]
+  );
+
+  const name = user?.fullName || user?.username || "מוביל";
+  const dateStr = new Date().toLocaleDateString("he-IL", {
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+  const pendingInRun = myStops.filter((s) => s.status !== "COMPLETED").length;
+  const doneInRun = myStops.filter((s) => s.status === "COMPLETED").length;
+  const alertTotal = unreadNotif + chatUnread;
+
+  const quickCards = [
+    {
+      title: "תכנון מסלול יומי",
+      value: pendingPool.length,
+      sub: "ממתינות בבריכה",
+      icon: <LocalShippingIcon sx={{ fontSize: 26 }} />,
+      color: dashboardStatColor(0),
+      onClick: () => navigate("/driver/claim-today"),
+    },
+    {
+      title: "מסלול היום",
+      value: myRun ? pendingInRun : "—",
+      sub: myRun ? `${doneInRun} הושלמו מתוך ${myStops.length}` : "לא תפסת מסלול",
+      icon: <RouteIcon sx={{ fontSize: 26 }} />,
+      color: dashboardStatColor(1),
+      onClick: () => setTab(0),
+    },
+    {
+      title: "הובלות החודש",
+      value: myMonthly?.count ?? 0,
+      sub: "עצירות שהושלמו",
+      icon: <CalendarMonthIcon sx={{ fontSize: 26 }} />,
+      color: dashboardStatColor(2),
+      onClick: () => navigate("/driver/monthly"),
+    },
+    {
+      title: "התראות וצ׳אט",
+      value: alertTotal,
+      sub: chatUnread > 0 ? `${chatUnread} הודעות צ׳אט` : unreadNotif > 0 ? "התראות מערכת" : "אין חדש",
+      icon: <MarkChatUnreadIcon sx={{ fontSize: 26 }} />,
+      color: dashboardStatColor(3),
+      onClick: () => navigate("/chat"),
+    },
+  ];
+
+  if (loading && !pendingPool.length && !myRun) {
     return (
       <Box sx={{ display: "flex", justifyContent: "center", mt: 8 }}>
-        <CircularProgress sx={{ color: "#D2691E" }} />
+        <CircularProgress color="secondary" />
       </Box>
     );
   }
 
   return (
     <Box sx={{ width: "100%" }}>
-      <Typography sx={{ fontSize: 22, fontWeight: 700, color: "#3E2723", mb: 2 }}>
-        דף מוביל - הובלות
-      </Typography>
+      <PageHeader
+        title="לוח מחוונים"
+        description={`שלום, ${name} — מסלול היום, ספירת בריכה, הובלות החודש והתראות.\n${dateStr}`}
+      />
+
+      <Grid container spacing={2} sx={{ mb: 2 }}>
+        {quickCards.map((c, i) => (
+          <Grid key={c.title} size={{ xs: 6, md: 3 }}>
+            <Box
+              onClick={c.onClick}
+              sx={{
+                bgcolor: c.color,
+                borderRadius: 3,
+                p: 2.5,
+                minHeight: 130,
+                cursor: "pointer",
+                display: "flex",
+                flexDirection: "column",
+                justifyContent: "space-between",
+                transition: "transform 0.15s ease, opacity 0.15s ease",
+                "&:hover": { transform: "translateY(-2px)", opacity: 0.94 },
+              }}
+            >
+              <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                <Typography sx={{ fontSize: 13, color: "rgba(255,255,255,0.88)", fontWeight: 600 }}>
+                  {c.title}
+                </Typography>
+                <Box sx={{ color: "rgba(255,255,255,0.75)" }}>{c.icon}</Box>
+              </Box>
+              <Box>
+                <Typography sx={{ fontSize: 32, fontWeight: 800, color: "white", lineHeight: 1 }}>
+                  {c.value}
+                </Typography>
+                <Typography sx={{ fontSize: 11.5, color: "rgba(255,255,255,0.72)", mt: 0.5 }}>{c.sub}</Typography>
+              </Box>
+            </Box>
+          </Grid>
+        ))}
+      </Grid>
 
       {error && (
-        <Alert severity="error" sx={{ mb: 2 }}>
+        <Alert
+          severity="error"
+          sx={{ mb: 2 }}
+          onClose={() => {
+            dispatch(clearDeliveryError());
+          }}
+        >
           {error}
         </Alert>
       )}
-
-      <Card sx={{ borderRadius: 3, mb: 2, border: "1px solid #E8C9B0" }}>
-        <CardContent>
-          <Typography sx={{ fontWeight: 700, mb: 1 }}>תפיסת הובלות להיום לפי שעות עבודה</Typography>
-          <Box sx={{ display: "flex", gap: 1, alignItems: "center", flexWrap: "wrap" }}>
-            <TextField
-              label="שעות עבודה מתוכננות"
-              type="number"
-              size="small"
-              value={desiredHours}
-              onChange={(e) => setDesiredHours(e.target.value)}
-              sx={{ width: 180 }}
-            />
-            <Button
-              variant="contained"
-              startIcon={<RouteIcon />}
-              onClick={handleClaim}
-              disabled={claimLoading}
-              sx={{ bgcolor: "#D2691E", "&:hover": { bgcolor: "#A0522D" } }}
-            >
-              {claimLoading ? "טוען..." : "תפוס לי הובלות להיום"}
-            </Button>
-          </Box>
-          {myRun && (
-            <Typography sx={{ fontSize: 12, color: "#7B6A5F", mt: 1 }}>
-              תכנון היום: כ-{myRun.estimatedDuration || 0} שעות | מרחק משוער: {myRun.totalDistance || 0} ק"מ
-            </Typography>
-          )}
-        </CardContent>
-      </Card>
+      {info && (
+        <Alert severity="info" sx={{ mb: 2 }} onClose={() => dispatch(clearDeliveryInfo())}>
+          {info}
+        </Alert>
+      )}
+      {driverReleaseNotice && (
+        <Alert
+          severity="warning"
+          sx={{ mb: 2 }}
+          onClose={() => dispatch(clearDriverReleaseNotice())}
+        >
+          {driverReleaseNotice}
+        </Alert>
+      )}
 
       <Tabs
         value={tab}
@@ -177,104 +328,70 @@ const DriverDeliveries = () => {
           '& .MuiTab-root': { fontSize: { xs: 11.5, sm: 13 }, minHeight: 44 },
         }}
       >
-        <Tab label={`כל ההובלות הממתינות (${pendingPool.length})`} />
         <Tab label={`הובלות שאני מבצע היום (${myStops.length})`} />
         <Tab label={`בתהליך מסירה לנגר (${myCarpenterStops.length})`} />
         <Tab label={`בתהליך מסירה ללקוח (${myCustomerStops.length})`} />
       </Tabs>
 
-      {tab === 0 && (
-        <Grid container spacing={1.5}>
-          {pendingPool.length === 0 ? (
-            <Grid size={{ xs: 12 }}>
-              <Alert severity="info">אין כרגע הובלות ממתינות</Alert>
+      <Grid container spacing={1.5}>
+        {activeStops.length === 0 ? (
+          <Grid size={{ xs: 12 }}>
+            <Alert severity="info">{emptyHint}</Alert>
+          </Grid>
+        ) : (
+          activeStops.map((s, i) => (
+            <Grid size={{ xs: 12, md: 6 }} key={`${s.order?._id || s.order}-${i}`}>
+              <Card sx={{ borderRadius: 2, border: "1px solid #E8C9B0" }}>
+                <CardContent>
+                  <Typography sx={{ fontWeight: 700 }}>{typeLabel[s.deliveryType]}</Typography>
+                  <Typography sx={{ fontSize: 12, color: "#A1887F", mb: 0.4 }}>
+                    מספר הזמנה: {getOrderCode(s)}
+                  </Typography>
+                  <DeliveryStations stop={s} />
+                  <Typography sx={{ fontSize: 12, color: "#7B6A5F", mb: 1, mt: 0.5 }}>
+                    {s.contactName} {s.contactPhone ? `| ${s.contactPhone}` : ""}
+                  </Typography>
+                  <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap", alignItems: "center" }}>
+                    {isStopDelivered(s) && (
+                      <Typography
+                        component="span"
+                        sx={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 0.5,
+                          color: "#2E7D32",
+                          fontWeight: 700,
+                          fontSize: 14,
+                        }}
+                      >
+                        <CheckCircleIcon sx={{ fontSize: 20 }} />
+                        נמסר
+                      </Typography>
+                    )}
+                    {!isStopDelivered(s) && (
+                      <Button
+                        size="small"
+                        variant="contained"
+                        startIcon={<CheckCircleIcon />}
+                        onClick={() => handleCompleteStop(s._id)}
+                        disabled={completeLoading}
+                        sx={{ bgcolor: "#2E7D32", "&:hover": { bgcolor: "#1B5E20" } }}
+                      >
+                        סמן כהושלם
+                      </Button>
+                    )}
+                  </Box>
+                </CardContent>
+              </Card>
             </Grid>
-          ) : (
-            pendingPool.map((s, i) => (
-              <Grid size={{ xs: 12, md: 6 }} key={`${s.order}-${i}`}>
-                <Card sx={{ borderRadius: 2, border: "1px solid #E8C9B0" }}>
-                  <CardContent>
-                    <Typography sx={{ fontWeight: 700 }}>{typeLabel[s.deliveryType]}</Typography>
-                    <Typography sx={{ fontSize: 12, color: "#A1887F", mb: 0.4 }}>
-                      מספר הזמנה: {getOrderCode(s)}
-                    </Typography>
-                    <Typography sx={{ fontSize: 13 }}>{getSourceLine(s)}</Typography>
-                    <Typography sx={{ fontSize: 13 }}>{getDestinationLine(s)}</Typography>
-                    <Typography sx={{ fontSize: 12, color: "#7B6A5F" }}>
-                      {s.contactName} {s.contactPhone ? `| ${s.contactPhone}` : ""}
-                    </Typography>
-                  </CardContent>
-                </Card>
-              </Grid>
-            ))
-          )}
-        </Grid>
-      )}
+          ))
+        )}
+      </Grid>
 
-      {tab > 0 && (
-        <Grid container spacing={1.5}>
-          {(tab === 1 ? myStops : tab === 2 ? myCarpenterStops : myCustomerStops).length === 0 ? (
-            <Grid size={{ xs: 12 }}>
-              <Alert severity="info">אין הובלות בתצוגה זו</Alert>
-            </Grid>
-          ) : (
-            (tab === 1 ? myStops : tab === 2 ? myCarpenterStops : myCustomerStops).map((s, i) => (
-              <Grid size={{ xs: 12, md: 6 }} key={`${s.order?._id || s.order}-${i}`}>
-                <Card sx={{ borderRadius: 2, border: "1px solid #E8C9B0" }}>
-                  <CardContent>
-                    <Typography sx={{ fontWeight: 700 }}>{typeLabel[s.deliveryType]}</Typography>
-                    <Typography sx={{ fontSize: 12, color: "#A1887F", mb: 0.4 }}>
-                      מספר הזמנה: {getOrderCode(s)}
-                    </Typography>
-                    <Typography sx={{ fontSize: 13 }}>{getSourceLine(s)}</Typography>
-                    <Typography sx={{ fontSize: 13 }}>{getDestinationLine(s)}</Typography>
-                    <Typography sx={{ fontSize: 12, color: "#7B6A5F", mb: 1 }}>
-                      {s.contactName} {s.contactPhone ? `| ${s.contactPhone}` : ""}
-                    </Typography>
-                    <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap", alignItems: "center" }}>
-                      {isStopDelivered(s) && (
-                        <Typography
-                          component="span"
-                          sx={{
-                            display: "inline-flex",
-                            alignItems: "center",
-                            gap: 0.5,
-                            color: "#2E7D32",
-                            fontWeight: 700,
-                            fontSize: 14,
-                          }}
-                        >
-                          <CheckCircleIcon sx={{ fontSize: 20 }} />
-                          נמסר
-                        </Typography>
-                      )}
-                      <Link href={s.wazeUrl} target="_blank" underline="none">
-                        <Button size="small" variant="outlined" startIcon={<LocalShippingIcon />}>
-                          פתח Waze
-                        </Button>
-                      </Link>
-                      {!isStopDelivered(s) && (
-                        <Button
-                          size="small"
-                          variant="contained"
-                          startIcon={<CheckCircleIcon />}
-                          onClick={() => handleCompleteStop(s._id)}
-                          disabled={completeLoading}
-                          sx={{ bgcolor: "#2E7D32", "&:hover": { bgcolor: "#1B5E20" } }}
-                        >
-                          סמן כהושלם
-                        </Button>
-                      )}
-                    </Box>
-                  </CardContent>
-                </Card>
-              </Grid>
-            ))
-          )}
-        </Grid>
-      )}
+      <FeedbackSnackbar />
     </Box>
   );
 };
 
+export { DeliveryStations };
 export default DriverDeliveries;

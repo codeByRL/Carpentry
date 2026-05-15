@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Box, Typography, Grid, Paper, Alert, CircularProgress } from '@mui/material';
 import API from '../services/api';
+import PageHeader from '../components/PageHeader.jsx';
 
 const BASE_URL = import.meta.env.VITE_REACT_APP_API_URL || 'http://localhost:5001';
 
@@ -28,24 +29,33 @@ const SalesFabricsCatalog = () => {
   if (loading) {
     return (
       <Box sx={{ display: 'flex', justifyContent: 'center', mt: 8 }}>
-        <CircularProgress sx={{ color: '#D2691E' }} />
+        <CircularProgress color="secondary" />
       </Box>
     );
   }
 
   return (
-    <Box sx={{ width: '100%', maxWidth: '100%' }}>
-      <Typography sx={{ fontSize: 22, fontWeight: 700, color: '#3E2723', mb: 2 }}>
-        קטלוג בדי ריפוד
-      </Typography>
+    <Box sx={{ width: '100%', maxWidth: '100%', minWidth: 0 }}>
+      <PageHeader title="קטלוג בדי ריפוד" description="בחירת בדים לפי דגם וקוד — לשימוש סוכני המכירות בהצעות מחיר." />
       {fabrics.length === 0 ? (
         <Alert severity="info">אין בדי ריפוד זמינים כרגע.</Alert>
       ) : (
         <Grid container spacing={2}>
           {fabrics.map((f) => (
             <Grid key={f._id} size={{ xs: 12, sm: 6, md: 4, lg: 3 }}>
-              <Paper sx={{ p: 1.5, borderRadius: 3, border: '1px solid #E8C9B0', bgcolor: '#FBF0E9' }}>
-                <Box sx={{ height: 170, borderRadius: 2, overflow: 'hidden', bgcolor: '#F5F5F5', mb: 1 }}>
+              <Paper
+                elevation={1}
+                sx={{
+                  p: 2,
+                  height: '100%',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  borderRadius: 2,
+                  transition: 'transform 0.2s ease, box-shadow 0.2s ease',
+                  '&:hover': { transform: 'translateY(-3px)', boxShadow: 4 },
+                }}
+              >
+                <Box sx={{ height: 170, borderRadius: 2, overflow: 'hidden', bgcolor: 'grey.100', mb: 1.5 }}>
                   {f.image ? (
                     <img
                       src={f.image.startsWith('http') ? f.image : `${BASE_URL}${f.image}`}

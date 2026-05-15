@@ -83,8 +83,8 @@ export const claimMyDeliveries = async (req, res) => {
 
 export const getMyTodayDeliveries = async (req, res) => {
   try {
-    const run = await deliveryService.getDriverTodayRun(req.user.id);
-    res.json(run || null);
+    const result = await deliveryService.getDriverTodayRun(req.user.id);
+    res.json(result);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

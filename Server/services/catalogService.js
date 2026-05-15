@@ -86,8 +86,16 @@ const characterizeProduct = async (productId, data) => {
     throw new Error("למוצר לא שויך נגר — יש לשייך נגר לפני אפיון");
   }
 
+  const workHours = Number(data.estimatedWorkTime);
+  if (!Number.isFinite(workHours) || workHours <= 0) {
+    throw new Error("יש להזין זמן עבודה משוער (לפחות חצי שבוע)");
+  }
+  if (!Array.isArray(data.baseProducts) || data.baseProducts.length === 0) {
+    throw new Error("יש להוסיף לפחות חומר גלם אחד");
+  }
+
   product.baseProducts = data.baseProducts;
-  product.estimatedWorkTime = data.estimatedWorkTime;
+  product.estimatedWorkTime = workHours;
   product.woodOptions = [];
   product.needsWoodSelection = false;
 
@@ -147,6 +155,10 @@ const approveProduct = async (productId, price) => {
   const product = await CatalogProduct.findById(productId);
   if (!product || product.status !== "WAITING_ADMIN_APPROVAL")
     throw new Error("מוצר לא ממתין לאישור");
+
+  if (!Number.isFinite(Number(product.estimatedWorkTime)) || Number(product.estimatedWorkTime) <= 0) {
+    throw new Error("לא ניתן לאשר מוצר ללא זמן עבודה משוער — הנגר חייב לאפיין מחדש");
+  }
 
   product.price = price;
   product.status = "ACTIVE";
